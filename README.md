@@ -130,7 +130,9 @@ CREATE POLICY "Service role full access" ON system_configs FOR ALL USING (true) 
 
 关键说明
 **数据库是必需的**：本项目使用 Supabase（PostgreSQL）作为数据存储，无法脱机运行。你需要一个可访问的 Supabase 实例。
+
 **端口**：默认 5000 端口，可通过 DEPLOY_RUN_PORT 环境变量修改。
+
 **密码安全**：生产环境请务必更换 JWT_SECRET 为强随机字符串，并修改种子数据中的默认密码。
 
 ## 快速开始
