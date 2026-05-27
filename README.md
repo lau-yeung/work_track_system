@@ -5,8 +5,8 @@
 ## 本地部署
 
 ### 1. 环境要求
-- &zwnj;Node.js&zwnj; 18+（推荐 20+）
-- &zwnj;pnpm&zwnj; 包管理器（npm install -g pnpm 安装）
+- **Node.js** 18+（推荐 20+）
+- **pnpm** 包管理器（npm install -g pnpm 安装）
 ### 2. 获取代码
 将项目代码克隆或复制到本地目录。
 ### 3. 配置环境变量
@@ -24,7 +24,7 @@ JWT_SECRET=your-random-secret-string
 DEPLOY_RUN_PORT=5000
 ```
 
-&zwnj;获取 Supabase 凭据&zwnj;：前往 supabase.com 注册并创建一个项目，在 Project Settings → API 中可找到 URL 和 Service Role Key。然后需要在 Supabase 的 SQL Editor 中执行建表语句（见下方）。
+**获取 Supabase 凭据**：前往 supabase.com 注册并创建一个项目，在 Project Settings → API 中可找到 URL 和 Service Role Key。然后需要在 Supabase 的 SQL Editor 中执行建表语句（见下方）。
 ### 4. 安装依赖 & 启动
 
 ```bash
@@ -129,9 +129,9 @@ CREATE POLICY "Service role full access" ON system_configs FOR ALL USING (true) 
 ```
 
 关键说明
-&zwnj;数据库是必需的&zwnj;：本项目使用 Supabase（PostgreSQL）作为数据存储，无法脱机运行。你需要一个可访问的 Supabase 实例。
-&zwnj;端口&zwnj;：默认 5000 端口，可通过 DEPLOY_RUN_PORT 环境变量修改。
-&zwnj;密码安全&zwnj;：生产环境请务必更换 JWT_SECRET 为强随机字符串，并修改种子数据中的默认密码。
+**数据库是必需的**：本项目使用 Supabase（PostgreSQL）作为数据存储，无法脱机运行。你需要一个可访问的 Supabase 实例。
+**端口**：默认 5000 端口，可通过 DEPLOY_RUN_PORT 环境变量修改。
+**密码安全**：生产环境请务必更换 JWT_SECRET 为强随机字符串，并修改种子数据中的默认密码。
 
 ## 快速开始
 
