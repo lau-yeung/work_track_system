@@ -11,6 +11,8 @@
 将项目代码克隆或复制到本地目录。
 ### 3. 配置环境变量
 在项目根目录创建 .env.local 文件，填入以下变量：
+
+```env
 # Supabase 数据库连接（必填，需要你自己的 Supabase 项目）
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
@@ -20,8 +22,12 @@ JWT_SECRET=your-random-secret-string
 
 # 服务端口
 DEPLOY_RUN_PORT=5000
+```
+
 获取 Supabase 凭据：前往 supabase.com 注册并创建一个项目，在 Project Settings → API 中可找到 URL 和 Service Role Key。然后需要在 Supabase 的 SQL Editor 中执行建表语句（见下方）。
 ### 4. 安装依赖 & 启动
+
+```bash
 # 安装依赖
 pnpm install
 
@@ -30,16 +36,22 @@ pnpm dev
 
 # 或者生产模式
 pnpm build && pnpm start
+```
+
 启动后访问 http://localhost:5000 即可。
 ### 5. 初始化数据库和种子数据
 服务启动后，调用种子接口初始化演示数据：
+
+```bash
 curl -X POST http://localhost:5000/api/seed
+```
+
 这会创建 4 个演示账号：
-角色	用户名	密码
-管理员	admin	admin123
-项目负责人	pm	pm123
-普通用户	user	user123
-普通用户	user2	user123
+角色	    | 用户名  | 密码
+管理员     | admin  | admin123
+项目负责人	| pm      | pm123
+普通用户	  | user    | user123
+普通用户	  | user2   | user123
 ### 6. 数据库建表 SQL
 如果 Supabase 项目中还没有表结构，需要在 SQL Editor 中执行以下建表语句：
 
