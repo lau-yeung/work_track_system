@@ -2,6 +2,125 @@
 
 这是一个基于 [Next.js 16](https://nextjs.org) + [shadcn/ui](https://ui.shadcn.com) 的全栈应用项目。
 
+## 本地部署
+
+### 1. 环境要求
+- Node.js 18+（推荐 20+）
+- pnpm 包管理器（npm install -g pnpm 安装）
+### 2. 获取代码
+将项目代码克隆或复制到本地目录。
+### 3. 配置环境变量
+在项目根目录创建 .env.local 文件，填入以下变量：
+# Supabase 数据库连接（必填，需要你自己的 Supabase 项目）
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# JWT 密钥（必填，自定义一个随机字符串即可）
+JWT_SECRET=your-random-secret-string
+
+# 服务端口
+DEPLOY_RUN_PORT=5000
+获取 Supabase 凭据：前往 supabase.com 注册并创建一个项目，在 Project Settings → API 中可找到 URL 和 Service Role Key。然后需要在 Supabase 的 SQL Editor 中执行建表语句（见下方）。
+### 4. 安装依赖 & 启动
+# 安装依赖
+pnpm install
+
+# 开发模式启动（支持热更新）
+pnpm dev
+
+# 或者生产模式
+pnpm build && pnpm start
+启动后访问 http://localhost:5000 即可。
+### 5. 初始化数据库和种子数据
+服务启动后，调用种子接口初始化演示数据：
+curl -X POST http://localhost:5000/api/seed
+这会创建 4 个演示账号：
+角色	用户名	密码
+管理员	admin	admin123
+项目负责人	pm	pm123
+普通用户	user	user123
+普通用户	user2	user123
+### 6. 数据库建表 SQL
+如果 Supabase 项目中还没有表结构，需要在 SQL Editor 中执行以下建表语句：
+
+```sql
+-- 用户表
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  username VARCHAR(50) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  real_name VARCHAR(50) NOT NULL,
+  role VARCHAR(20) NOT NULL DEFAULT 'user',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 项目表
+CREATE TABLE IF NOT EXISTS projects (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  start_date DATE,
+  end_date DATE,
+  budget_hours DECIMAL(10,1),
+  created_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 项目成员表
+CREATE TABLE IF NOT EXISTS project_members (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  role VARCHAR(20) NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(project_id, user_id)
+);
+
+-- 工时记录表
+CREATE TABLE IF NOT EXISTS time_entries (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id),
+  project_id INTEGER REFERENCES projects(id),
+  date DATE NOT NULL,
+  hours DECIMAL(4,1) NOT NULL,
+  work_content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 系统配置表
+CREATE TABLE IF NOT EXISTS system_configs (
+  id SERIAL PRIMARY KEY,
+  config_key VARCHAR(100) UNIQUE NOT NULL,
+  config_value TEXT NOT NULL,
+  description TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 启用 RLS
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE time_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_configs ENABLE ROW LEVEL SECURITY;
+
+-- 允许 service_role 完全访问（因为后端使用 service_role_key）
+CREATE POLICY "Service role full access" ON users FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON projects FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON project_members FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON time_entries FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON system_configs FOR ALL USING (true) WITH CHECK (true);
+```
+
+关键说明
+数据库是必需的：本项目使用 Supabase（PostgreSQL）作为数据存储，无法脱机运行。你需要一个可访问的 Supabase 实例。
+端口：默认 5000 端口，可通过 DEPLOY_RUN_PORT 环境变量修改。
+密码安全：生产环境请务必更换 JWT_SECRET 为强随机字符串，并修改种子数据中的默认密码。
+
 ## 快速开始
 
 ### 启动开发服务器
