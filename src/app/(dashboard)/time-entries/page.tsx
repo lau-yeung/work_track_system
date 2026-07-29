@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SimplePagination } from '@/components/simple-pagination';
-import { Plus, Edit, Trash2 } from 'lucide-react';
+import { Plus, Edit, Trash2, Calendar } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface TimeEntry {
@@ -56,6 +56,8 @@ export default function TimeEntriesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [filterProject, setFilterProject] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [form, setForm] = useState({
     project_id: '',
     work_date: new Date().toISOString().split('T')[0],
@@ -70,7 +72,9 @@ export default function TimeEntriesPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(page), pageSize: '20' });
-      if (filterProject) params.set('projectId', filterProject);
+      if (filterProject && filterProject !== 'all') params.set('projectId', filterProject);
+      if (startDate) params.set('startDate', startDate);
+      if (endDate) params.set('endDate', endDate);
       const data = await apiFetch<{ data: TimeEntry[]; total: number }>(`/api/time-entries?${params}`);
       setEntries(data.data || []);
       setTotal(data.total || 0);
@@ -79,7 +83,7 @@ export default function TimeEntriesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filterProject]);
+  }, [page, filterProject, startDate, endDate]);
 
   const fetchProjects = async () => {
     try {
@@ -177,6 +181,13 @@ export default function TimeEntriesPage() {
       coordination_matters: entry.coordination_matters || '',
       tomorrow_plan: entry.tomorrow_plan || '',
     });
+  };
+
+  const handleResetFilters = () => {
+    setFilterProject('');
+    setStartDate('');
+    setEndDate('');
+    setPage(1);
   };
 
   const totalPages = Math.ceil(total / 20);
@@ -297,7 +308,7 @@ export default function TimeEntriesPage() {
       </div>
 
       {/* Filter */}
-      <div className="flex gap-3 mb-4">
+      <div className="flex flex-wrap gap-3 mb-4">
         <Select value={filterProject} onValueChange={setFilterProject}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="全部项目" />
@@ -311,6 +322,37 @@ export default function TimeEntriesPage() {
             ))}
           </SelectContent>
         </Select>
+
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-[#475569]" />
+          <Input
+            type="date"
+            value={startDate}
+            onChange={(e) => {
+              setStartDate(e.target.value);
+              setPage(1);
+            }}
+            placeholder="开始日期"
+            className="w-40"
+          />
+          <span className="text-[#475569]">至</span>
+          <Input
+            type="date"
+            value={endDate}
+            onChange={(e) => {
+              setEndDate(e.target.value);
+              setPage(1);
+            }}
+            placeholder="结束日期"
+            className="w-40"
+          />
+        </div>
+
+        {(filterProject || startDate || endDate) && (
+          <Button variant="outline" onClick={handleResetFilters}>
+            重置筛选
+          </Button>
+        )}
       </div>
 
       <Card className="border-[#e2e8f0]">

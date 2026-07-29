@@ -32,6 +32,9 @@ const configLabels: Record<string, string> = {
   critical_threshold: '严重阈值(%)',
   allow_historical_entry: '允许补填历史工时',
   enable_ai_features: '启用AI功能',
+  allow_user_registration: '允许用户注册',
+  registration_approval_required: '注册需审核',
+  ai_api_key: 'AI API密钥',
 };
 
 export default function SettingsPage() {
@@ -103,57 +106,177 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      <Card className="border-[#e2e8f0]">
-        <CardHeader>
-          <CardTitle className="text-base font-semibold text-[#1e3a5f]">
-            通用配置
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {loading ? (
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-12 bg-gray-100 animate-pulse rounded" />
-              ))}
-            </div>
-          ) : (
-            configs.map((config) => (
-              <div key={config.id} className="flex items-start gap-4">
-                <div className="w-44 shrink-0">
-                  <Label className="text-sm font-medium text-[#1e3a5f]">
-                    {configLabels[config.config_key] || config.config_key}
-                  </Label>
-                  {config.description && (
-                    <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
-                  )}
-                </div>
-                <div className="flex-1 max-w-xs">
-                  {config.config_type === 'boolean' ? (
-                    <Select
-                      value={config.config_value}
-                      onValueChange={(v) => updateConfig(config.config_key, v)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="true">开启</SelectItem>
-                        <SelectItem value="false">关闭</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      type={config.config_type === 'number' ? 'number' : 'text'}
-                      value={config.config_value}
-                      onChange={(e) => updateConfig(config.config_key, e.target.value)}
-                    />
-                  )}
-                </div>
+      <div className="space-y-6">
+        {/* 工时配置 */}
+        <Card className="border-[#e2e8f0]">
+          <CardHeader>
+            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+              工时配置
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {loading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-12 bg-gray-100 animate-pulse rounded" />
+                ))}
               </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
+            ) : (
+              configs
+                .filter((c) =>
+                  ['daily_hour_limit', 'warning_threshold', 'critical_threshold', 'allow_historical_entry'].includes(
+                    c.config_key
+                  )
+                )
+                .map((config) => (
+                  <div key={config.id} className="flex items-start gap-4">
+                    <div className="w-44 shrink-0">
+                      <Label className="text-sm font-medium text-[#1e3a5f]">
+                        {configLabels[config.config_key] || config.config_key}
+                      </Label>
+                      {config.description && (
+                        <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                      )}
+                    </div>
+                    <div className="flex-1 max-w-xs">
+                      {config.config_type === 'boolean' ? (
+                        <Select
+                          value={config.config_value}
+                          onValueChange={(v) => updateConfig(config.config_key, v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true">开启</SelectItem>
+                            <SelectItem value="false">关闭</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          type={config.config_type === 'number' ? 'number' : 'text'}
+                          value={config.config_value}
+                          onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 用户注册配置 */}
+        <Card className="border-[#e2e8f0]">
+          <CardHeader>
+            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+              用户注册配置
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {loading ? (
+              <div className="space-y-4">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-12 bg-gray-100 animate-pulse rounded" />
+                ))}
+              </div>
+            ) : (
+              configs
+                .filter((c) =>
+                  ['allow_user_registration', 'registration_approval_required'].includes(c.config_key)
+                )
+                .map((config) => (
+                  <div key={config.id} className="flex items-start gap-4">
+                    <div className="w-44 shrink-0">
+                      <Label className="text-sm font-medium text-[#1e3a5f]">
+                        {configLabels[config.config_key] || config.config_key}
+                      </Label>
+                      {config.description && (
+                        <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                      )}
+                    </div>
+                    <div className="flex-1 max-w-xs">
+                      <Select
+                        value={config.config_value}
+                        onValueChange={(v) => updateConfig(config.config_key, v)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="true">开启</SelectItem>
+                          <SelectItem value="false">关闭</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* AI配置 */}
+        <Card className="border-[#e2e8f0]">
+          <CardHeader>
+            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+              AI配置
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {loading ? (
+              <div className="space-y-4">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-12 bg-gray-100 animate-pulse rounded" />
+                ))}
+              </div>
+            ) : (
+              configs
+                .filter((c) => ['enable_ai_features', 'ai_api_key'].includes(c.config_key))
+                .map((config) => (
+                  <div key={config.id} className="flex items-start gap-4">
+                    <div className="w-44 shrink-0">
+                      <Label className="text-sm font-medium text-[#1e3a5f]">
+                        {configLabels[config.config_key] || config.config_key}
+                      </Label>
+                      {config.description && (
+                        <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                      )}
+                    </div>
+                    <div className="flex-1 max-w-xs">
+                      {config.config_key === 'ai_api_key' ? (
+                        <Input
+                          type="password"
+                          value={config.config_value}
+                          onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                          placeholder="输入AI API密钥"
+                        />
+                      ) : config.config_type === 'boolean' ? (
+                        <Select
+                          value={config.config_value}
+                          onValueChange={(v) => updateConfig(config.config_key, v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true">开启</SelectItem>
+                            <SelectItem value="false">关闭</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          type={config.config_type === 'number' ? 'number' : 'text'}
+                          value={config.config_value}
+                          onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

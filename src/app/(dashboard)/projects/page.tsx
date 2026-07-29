@@ -34,6 +34,7 @@ interface Project {
   description: string | null;
   owner_id: number;
   estimated_hours: string;
+  actual_hours: number;
   status: string;
   start_date: string | null;
   end_date: string | null;
@@ -60,6 +61,7 @@ export default function ProjectsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showEdit, setShowEdit] = useState<Project | null>(null);
   const [showMembers, setShowMembers] = useState<number | null>(null);
   const [users, setUsers] = useState<UserOption[]>([]);
   const [memberList, setMemberList] = useState<Array<{ users: UserOption }>>([]);
@@ -68,6 +70,7 @@ export default function ProjectsPage() {
     description: '',
     owner_id: '',
     estimated_hours: '',
+    status: 'in_progress',
     start_date: '',
     end_date: '',
     member_ids: [] as number[],
@@ -115,10 +118,32 @@ export default function ProjectsPage() {
       });
       toast.success('项目创建成功');
       setShowCreate(false);
-      setForm({ name: '', description: '', owner_id: '', estimated_hours: '', start_date: '', end_date: '', member_ids: [] });
+      setForm({ name: '', description: '', owner_id: '', estimated_hours: '', status: 'in_progress', start_date: '', end_date: '', member_ids: [] });
       fetchProjects();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '创建失败');
+    }
+  };
+
+  const handleEdit = async () => {
+    if (!showEdit) return;
+    try {
+      await apiFetch(`/api/projects/${showEdit.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: form.name,
+          description: form.description,
+          estimated_hours: form.estimated_hours,
+          status: form.status,
+          start_date: form.start_date,
+          end_date: form.end_date,
+        }),
+      });
+      toast.success('项目更新成功');
+      setShowEdit(null);
+      fetchProjects();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '更新失败');
     }
   };
 
@@ -168,6 +193,20 @@ export default function ProjectsPage() {
     }
   };
 
+  const openEdit = (project: Project) => {
+    setShowEdit(project);
+    setForm({
+      name: project.name,
+      description: project.description || '',
+      owner_id: String(project.owner_id),
+      estimated_hours: project.estimated_hours,
+      status: project.status,
+      start_date: project.start_date || '',
+      end_date: project.end_date || '',
+      member_ids: [],
+    });
+  };
+
   const totalPages = Math.ceil(total / 20);
 
   return (
@@ -199,6 +238,8 @@ export default function ProjectsPage() {
                 <TableHead>项目名称</TableHead>
                 <TableHead>负责人</TableHead>
                 <TableHead>预估工时</TableHead>
+                <TableHead>实际工时</TableHead>
+                <TableHead>使用率</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>周期</TableHead>
                 <TableHead className="text-right">操作</TableHead>
@@ -207,54 +248,90 @@ export default function ProjectsPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-[#475569]">
+                  <TableCell colSpan={8} className="text-center py-8 text-[#475569]">
                     加载中...
                   </TableCell>
                 </TableRow>
               ) : projects.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-[#475569]">
+                  <TableCell colSpan={8} className="text-center py-8 text-[#475569]">
                     暂无项目
                   </TableCell>
                 </TableRow>
               ) : (
-                projects.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="font-medium">{p.name}</TableCell>
-                    <TableCell>{p.users?.real_name || '-'}</TableCell>
-                    <TableCell>{p.estimated_hours}h</TableCell>
-                    <TableCell>
-                      <Badge variant={statusMap[p.status]?.variant || 'default'}>
-                        {statusMap[p.status]?.label || p.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-[#475569]">
-                      {p.start_date && p.end_date
-                        ? `${p.start_date} ~ ${p.end_date}`
-                        : '-'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleViewMembers(p.id)}
-                        >
-                          <Users className="w-4 h-4" />
-                        </Button>
-                        {user?.role === 'admin' && (
+                projects.map((p) => {
+                  const estimated = parseFloat(p.estimated_hours);
+                  const actual = p.actual_hours || 0;
+                  const usageRate = estimated > 0 ? (actual / estimated) * 100 : 0;
+                  return (
+                    <TableRow key={p.id}>
+                      <TableCell className="font-medium">{p.name}</TableCell>
+                      <TableCell>{p.users?.real_name || '-'}</TableCell>
+                      <TableCell>{p.estimated_hours}h</TableCell>
+                      <TableCell>{actual}h</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-16 bg-gray-200 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                usageRate >= 100
+                                  ? 'bg-red-500'
+                                  : usageRate >= 80
+                                  ? 'bg-amber-400'
+                                  : 'bg-emerald-500'
+                              }`}
+                              style={{ width: `${Math.min(usageRate, 100)}%` }}
+                            />
+                          </div>
+                          <span className={`text-sm font-medium ${
+                            usageRate >= 100 ? 'text-red-600' : usageRate >= 80 ? 'text-amber-600' : 'text-emerald-600'
+                          }`}>
+                            {Math.round(usageRate)}%
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusMap[p.status]?.variant || 'default'}>
+                          {statusMap[p.status]?.label || p.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-[#475569]">
+                        {p.start_date && p.end_date
+                          ? `${p.start_date} ~ ${p.end_date}`
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDelete(p.id)}
+                            onClick={() => handleViewMembers(p.id)}
                           >
-                            <Trash2 className="w-4 h-4 text-red-500" />
+                            <Users className="w-4 h-4" />
                           </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                          {(user?.role === 'admin' || user?.role === 'pm') && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openEdit(p)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {user?.role === 'admin' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(p.id)}
+                            >
+                              <Trash2 className="w-4 h-4 text-red-500" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -286,11 +363,15 @@ export default function ProjectsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>项目描述</Label>
+              <div className="flex items-center justify-between">
+                <Label>项目描述</Label>
+                <span className="text-xs text-[#475569]">{form.description.length}/500</span>
+              </div>
               <Textarea
                 value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                placeholder="请输入项目描述"
+                onChange={(e) => setForm({ ...form, description: e.target.value.slice(0, 500) })}
+                placeholder="请输入项目描述（最多500字）"
+                maxLength={500}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -321,6 +402,7 @@ export default function ProjectsPage() {
                   value={form.estimated_hours}
                   onChange={(e) => setForm({ ...form, estimated_hours: e.target.value })}
                   placeholder="预估工时"
+                  min="0"
                 />
               </div>
             </div>
@@ -341,6 +423,22 @@ export default function ProjectsPage() {
                   onChange={(e) => setForm({ ...form, end_date: e.target.value })}
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>项目状态</Label>
+              <Select
+                value={form.status}
+                onValueChange={(v) => setForm({ ...form, status: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="in_progress">进行中</SelectItem>
+                  <SelectItem value="completed">已完成</SelectItem>
+                  <SelectItem value="at_risk">风险中</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>项目成员</Label>
@@ -379,6 +477,95 @@ export default function ProjectsPage() {
             </Button>
             <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleCreate}>
               创建
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={showEdit !== null} onOpenChange={() => setShowEdit(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>编辑项目</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>项目名称 *</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="请输入项目名称"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>项目描述</Label>
+                <span className="text-xs text-[#475569]">{form.description.length}/500</span>
+              </div>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value.slice(0, 500) })}
+                placeholder="请输入项目描述（最多500字）"
+                maxLength={500}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>负责人</Label>
+                <Input value={showEdit?.users?.real_name || ''} disabled />
+              </div>
+              <div className="space-y-2">
+                <Label>预估工时(h) *</Label>
+                <Input
+                  type="number"
+                  value={form.estimated_hours}
+                  onChange={(e) => setForm({ ...form, estimated_hours: e.target.value })}
+                  placeholder="预估工时"
+                  min="0"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>开始日期</Label>
+                <Input
+                  type="date"
+                  value={form.start_date}
+                  onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>结束日期</Label>
+                <Input
+                  type="date"
+                  value={form.end_date}
+                  onChange={(e) => setForm({ ...form, end_date: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>项目状态</Label>
+              <Select
+                value={form.status}
+                onValueChange={(v) => setForm({ ...form, status: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="in_progress">进行中</SelectItem>
+                  <SelectItem value="completed">已完成</SelectItem>
+                  <SelectItem value="at_risk">风险中</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEdit(null)}>
+              取消
+            </Button>
+            <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleEdit}>
+              保存
             </Button>
           </DialogFooter>
         </DialogContent>

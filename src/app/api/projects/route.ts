@@ -49,7 +49,26 @@ export async function GET(request: NextRequest) {
     const { data, error, count } = await query;
     if (error) throw new Error(`查询失败: ${error.message}`);
 
-    return NextResponse.json({ data, total: count, page, pageSize });
+    // Use a single query to get all actual hours (avoid N+1 problem)
+    const projectIds = (data || []).map((p: any) => p.id);
+    const { data: hoursData } = projectIds.length > 0
+      ? await client
+          .from('time_entries')
+          .select('project_id, hours')
+          .in('project_id', projectIds)
+      : { data: [] };
+
+    const hoursMap = new Map<number, number>();
+    (hoursData || []).forEach(({ project_id, hours }) => {
+      hoursMap.set(project_id, (hoursMap.get(project_id) || 0) + parseFloat(hours));
+    });
+
+    const projectsWithHours = (data || []).map((project: any) => ({
+      ...project,
+      actual_hours: Math.round((hoursMap.get(project.id) || 0) * 10) / 10,
+    }));
+
+    return NextResponse.json({ data: projectsWithHours, total: count, page, pageSize });
   } catch (err) {
     const message = err instanceof Error ? err.message : '查询失败';
     return NextResponse.json({ error: message }, { status: 500 });

@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth-provider';
 import { apiFetch } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -21,11 +22,11 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  LineChart,
-  Line,
   ComposedChart,
+  Line,
 } from 'recharts';
 import { toast } from 'sonner';
+import { AlertTriangle, CheckCircle2, TrendingUp, FileText, Loader2 } from 'lucide-react';
 
 interface ProjectOption {
   id: number;
@@ -46,6 +47,37 @@ interface DeviationItem {
   project_status: string;
 }
 
+interface RiskAnalysisResult {
+  project_id: number;
+  project_name: string;
+  risk_level: '低风险' | '中风险' | '高风险';
+  risk_probability: number;
+  usage_rate: number;
+  estimated_hours: number;
+  actual_hours: number;
+  risk_reasons: string[];
+  suggestions: string[];
+}
+
+interface ProjectSummaryResult {
+  project_id: number;
+  project_name: string;
+  project_description: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  owner_name: string;
+  estimated_hours: number;
+  actual_hours: number;
+  deviation: number;
+  usage_rate: number;
+  team_size: number;
+  members: string[];
+  summary_text: string;
+  highlights: string[];
+  risks: string[];
+}
+
 const statusColors = {
   normal: 'bg-emerald-100 text-emerald-700',
   warning: 'bg-amber-100 text-amber-700',
@@ -58,12 +90,22 @@ const statusLabels = {
   critical: '严重超支',
 };
 
+const riskLevelColors = {
+  '低风险': 'bg-emerald-100 text-emerald-700',
+  '中风险': 'bg-amber-100 text-amber-700',
+  '高风险': 'bg-red-100 text-red-700',
+};
+
 export default function AnalyticsPage() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProject, setSelectedProject] = useState('');
   const [trendData, setTrendData] = useState<{ dailyHours: Array<{ date: string; hours: number }>; cumulativeHours: Array<{ date: string; cumulative: number }> } | null>(null);
   const [deviations, setDeviations] = useState<DeviationItem[]>([]);
+  const [riskAnalysis, setRiskAnalysis] = useState<RiskAnalysisResult | null>(null);
+  const [projectSummary, setProjectSummary] = useState<ProjectSummaryResult | null>(null);
+  const [analyzingRisk, setAnalyzingRisk] = useState(false);
+  const [generatingSummary, setGeneratingSummary] = useState(false);
 
   useEffect(() => {
     apiFetch<{ data: ProjectOption[] }>('/api/projects/my')
@@ -104,6 +146,49 @@ export default function AnalyticsPage() {
         };
       })
     : [];
+
+  const handleRiskAnalysis = async () => {
+    if (!selectedProject) {
+      toast.error('请先选择项目');
+      return;
+    }
+    setAnalyzingRisk(true);
+    try {
+      const data = await apiFetch<{ data: RiskAnalysisResult }>('/api/ai/risk-analysis', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: parseInt(selectedProject) }),
+      });
+      setRiskAnalysis(data.data);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '分析失败');
+    } finally {
+      setAnalyzingRisk(false);
+    }
+  };
+
+  const handleProjectSummary = async () => {
+    if (!selectedProject) {
+      toast.error('请先选择项目');
+      return;
+    }
+    setGeneratingSummary(true);
+    try {
+      const data = await apiFetch<{ data: ProjectSummaryResult }>('/api/ai/project-summary', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: parseInt(selectedProject) }),
+      });
+      setProjectSummary(data.data);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '生成失败');
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const clearAnalysis = () => {
+    setRiskAnalysis(null);
+    setProjectSummary(null);
+  };
 
   return (
     <div>
@@ -152,6 +237,223 @@ export default function AnalyticsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Stats Cards */}
+      {selectedProject && deviations.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          {(() => {
+            const currentDeviation = deviations.find((d) => d.project_id === parseInt(selectedProject));
+            if (!currentDeviation) return null;
+            return [
+              {
+                label: '预估工时',
+                value: `${currentDeviation.estimated_hours}h`,
+                icon: TrendingUp,
+                color: 'text-[#1e3a5f]',
+                bg: 'bg-[#1e3a5f]/10',
+              },
+              {
+                label: '实际工时',
+                value: `${currentDeviation.actual_hours}h`,
+                icon: FileText,
+                color: 'text-amber-600',
+                bg: 'bg-amber-50',
+              },
+              {
+                label: '使用率',
+                value: `${currentDeviation.usage_rate}%`,
+                icon: CheckCircle2,
+                color: currentDeviation.usage_rate >= 100 ? 'text-red-600' : currentDeviation.usage_rate >= 80 ? 'text-amber-600' : 'text-emerald-600',
+                bg: currentDeviation.usage_rate >= 100 ? 'bg-red-50' : currentDeviation.usage_rate >= 80 ? 'bg-amber-50' : 'bg-emerald-50',
+              },
+              {
+                label: '偏差状态',
+                value: statusLabels[currentDeviation.deviation_status],
+                icon: AlertTriangle,
+                color: '',
+                bg: statusColors[currentDeviation.deviation_status],
+                isBadge: true,
+              },
+            ].map((stat) => (
+              <Card key={stat.label} className="border-[#e2e8f0]">
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-[#475569]">
+                    {stat.label}
+                  </CardTitle>
+                  <div className={`w-9 h-9 rounded-lg ${stat.bg} flex items-center justify-center`}>
+                    <stat.icon className={`w-5 h-5 ${stat.color}`} />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {stat.isBadge ? (
+                    <Badge variant="default" className={`${stat.bg}`}>
+                      {stat.value}
+                    </Badge>
+                  ) : (
+                    <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                  )}
+                </CardContent>
+              </Card>
+            ));
+          })()}
+        </div>
+      )}
+
+      {/* AI Features Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Risk Analysis Card */}
+        <Card className="border-[#e2e8f0]">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+              AI 风险分析
+            </CardTitle>
+            <Button
+              onClick={handleRiskAnalysis}
+              disabled={!selectedProject || analyzingRisk}
+              className="bg-[#1e3a5f] hover:bg-[#16304f] text-sm"
+            >
+              {analyzingRisk ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  分析中...
+                </>
+              ) : (
+                'AI 风险分析'
+              )}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {!riskAnalysis ? (
+              <div className="py-8 text-center text-[#475569] text-sm">
+                点击上方按钮进行AI风险分析
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">风险等级</span>
+                  <Badge className={`${riskLevelColors[riskAnalysis.risk_level]}`}>
+                    {riskAnalysis.risk_level}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">风险概率</span>
+                  <span className="text-sm font-bold text-[#1e3a5f]">{riskAnalysis.risk_probability}%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">工时使用率</span>
+                  <span className="text-sm font-bold text-[#1e3a5f]">{riskAnalysis.usage_rate}%</span>
+                </div>
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium text-[#475569] mb-2">风险原因：</p>
+                  <ul className="space-y-1">
+                    {riskAnalysis.risk_reasons.map((reason, index) => (
+                      <li key={index} className="text-sm text-[#1e3a5f] flex items-start gap-2">
+                        <span className="text-red-500 mt-1">-</span>
+                        {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium text-[#475569] mb-2">管理建议：</p>
+                  <ul className="space-y-1">
+                    {riskAnalysis.suggestions.map((suggestion, index) => (
+                      <li key={index} className="text-sm text-[#1e3a5f] flex items-start gap-2">
+                        <span className="text-emerald-500 mt-1">-</span>
+                        {suggestion}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Project Summary Card */}
+        <Card className="border-[#e2e8f0]">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+              AI 项目总结
+            </CardTitle>
+            <Button
+              onClick={handleProjectSummary}
+              disabled={!selectedProject || generatingSummary}
+              className="bg-[#1e3a5f] hover:bg-[#16304f] text-sm"
+            >
+              {generatingSummary ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  生成中...
+                </>
+              ) : (
+                'AI 项目总结'
+              )}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {!projectSummary ? (
+              <div className="py-8 text-center text-[#475569] text-sm">
+                点击上方按钮生成项目总结
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">项目名称</span>
+                  <span className="text-sm font-bold text-[#1e3a5f]">{projectSummary.project_name}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">项目状态</span>
+                  <Badge variant="default">{projectSummary.status}</Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">团队规模</span>
+                  <span className="text-sm font-bold text-[#1e3a5f]">{projectSummary.team_size}人</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-[#475569]">负责人</span>
+                  <span className="text-sm font-bold text-[#1e3a5f]">{projectSummary.owner_name}</span>
+                </div>
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium text-[#475569] mb-2">项目总结：</p>
+                  <p className="text-sm text-[#1e3a5f] leading-relaxed">{projectSummary.summary_text}</p>
+                </div>
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium text-[#475569] mb-2">项目亮点：</p>
+                  <ul className="space-y-1">
+                    {projectSummary.highlights.map((highlight, index) => (
+                      <li key={index} className="text-sm text-emerald-700 flex items-start gap-2">
+                        <span className="text-emerald-500 mt-1">+</span>
+                        {highlight}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="pt-2 border-t">
+                  <p className="text-sm font-medium text-[#475569] mb-2">风险点：</p>
+                  <ul className="space-y-1">
+                    {projectSummary.risks.map((risk, index) => (
+                      <li key={index} className="text-sm text-red-700 flex items-start gap-2">
+                        <span className="text-red-500 mt-1">!</span>
+                        {risk}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Clear Analysis Button */}
+      {(riskAnalysis || projectSummary) && (
+        <div className="mb-6">
+          <Button variant="outline" onClick={clearAnalysis}>
+            清除分析结果
+          </Button>
+        </div>
+      )}
 
       {/* Deviation Analysis */}
       <Card className="border-[#e2e8f0]">

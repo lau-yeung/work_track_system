@@ -92,6 +92,9 @@ export async function POST() {
       { config_key: 'critical_threshold', config_value: '100', config_type: 'number', description: '工时使用率严重阈值(%)' },
       { config_key: 'allow_historical_entry', config_value: 'true', config_type: 'boolean', description: '是否允许补填历史工时' },
       { config_key: 'enable_ai_features', config_value: 'false', config_type: 'boolean', description: '是否启用AI分析功能' },
+      { config_key: 'allow_user_registration', config_value: 'true', config_type: 'boolean', description: '是否允许用户注册' },
+      { config_key: 'registration_approval_required', config_value: 'true', config_type: 'boolean', description: '注册用户是否需要审核' },
+      { config_key: 'ai_api_key', config_value: '', config_type: 'string', description: 'AI服务API密钥' },
     ]);
     if (configError) throw new Error(`创建配置失败: ${configError.message}`);
 

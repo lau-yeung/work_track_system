@@ -16,7 +16,14 @@ function loadEnv(): void {
 
   try {
     try {
-      require('dotenv').config();
+      const dotenv = require('dotenv');
+      const path = require('path');
+      dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+      try {
+        dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+      } catch {
+        // .env not available, ignore
+      }
       if (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY) {
         envLoaded = true;
         return;

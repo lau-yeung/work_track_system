@@ -58,7 +58,8 @@ export default function UsersPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [editUser, setEditUser] = useState<UserRow | null>(null);
+  const [showEdit, setShowEdit] = useState<UserRow | null>(null);
+  const [showChangePassword, setShowChangePassword] = useState<UserRow | null>(null);
   const [form, setForm] = useState({
     username: '',
     password: '',
@@ -66,6 +67,10 @@ export default function UsersPage() {
     real_name: '',
     role: 'user',
     status: 'active',
+  });
+  const [passwordForm, setPasswordForm] = useState({
+    newPassword: '',
+    confirmPassword: '',
   });
 
   useEffect(() => {
@@ -111,7 +116,7 @@ export default function UsersPage() {
   };
 
   const handleEdit = async () => {
-    if (!editUser) return;
+    if (!showEdit) return;
     try {
       const body: Record<string, string> = {};
       if (form.email) body.email = form.email;
@@ -120,12 +125,12 @@ export default function UsersPage() {
       if (form.status) body.status = form.status;
       if (form.password) body.password = form.password;
 
-      await apiFetch(`/api/users/${editUser.id}`, {
+      await apiFetch(`/api/users/${showEdit.id}`, {
         method: 'PUT',
         body: JSON.stringify(body),
       });
       toast.success('用户更新成功');
-      setEditUser(null);
+      setShowEdit(null);
       fetchUsers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新失败');
@@ -141,6 +146,34 @@ export default function UsersPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
     }
+  };
+
+  const handleChangePassword = async () => {
+    if (!showChangePassword) return;
+    if (!passwordForm.newPassword) {
+      toast.error('请输入新密码');
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      toast.error('两次输入的密码不一致');
+      return;
+    }
+    try {
+      await apiFetch(`/api/users/${showChangePassword.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ password: passwordForm.newPassword }),
+      });
+      toast.success('密码修改成功');
+      setShowChangePassword(null);
+      setPasswordForm({ newPassword: '', confirmPassword: '' });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '修改失败');
+    }
+  };
+
+  const openChangePassword = (user: UserRow) => {
+    setShowChangePassword(user);
+    setPasswordForm({ newPassword: '', confirmPassword: '' });
   };
 
   if (!user || user.role !== 'admin') return null;
@@ -209,8 +242,15 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          onClick={() => openChangePassword(u)}
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => {
-                            setEditUser(u);
+                            setShowEdit(u);
                             setForm({
                               username: u.username,
                               password: '',
@@ -316,7 +356,7 @@ export default function UsersPage() {
       </Dialog>
 
       {/* Edit Dialog */}
-      <Dialog open={editUser !== null} onOpenChange={() => setEditUser(null)}>
+      <Dialog open={showEdit !== null} onOpenChange={() => setShowEdit(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>编辑用户</DialogTitle>
@@ -324,7 +364,7 @@ export default function UsersPage() {
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>用户名</Label>
-              <Input value={editUser?.username || ''} disabled />
+              <Input value={showEdit?.username || ''} disabled />
             </div>
             <div className="space-y-2">
               <Label>重置密码（留空不修改）</Label>
@@ -373,17 +413,59 @@ export default function UsersPage() {
                   <SelectContent>
                     <SelectItem value="active">正常</SelectItem>
                     <SelectItem value="disabled">禁用</SelectItem>
+                    <SelectItem value="pending">待审核</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditUser(null)}>
+            <Button variant="outline" onClick={() => setShowEdit(null)}>
               取消
             </Button>
             <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleEdit}>
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Password Dialog */}
+      <Dialog open={showChangePassword !== null} onOpenChange={() => setShowChangePassword(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>修改密码</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>用户名</Label>
+              <Input value={showChangePassword?.username || ''} disabled />
+            </div>
+            <div className="space-y-2">
+              <Label>新密码 *</Label>
+              <Input
+                type="password"
+                value={passwordForm.newPassword}
+                onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                placeholder="请输入新密码"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>确认密码 *</Label>
+              <Input
+                type="password"
+                value={passwordForm.confirmPassword}
+                onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                placeholder="请再次输入新密码"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowChangePassword(null)}>
+              取消
+            </Button>
+            <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleChangePassword}>
+              确认修改
             </Button>
           </DialogFooter>
         </DialogContent>

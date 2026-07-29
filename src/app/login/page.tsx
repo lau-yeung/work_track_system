@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Clock, Loader2 } from 'lucide-react';
+import Link from 'next/link';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -92,6 +93,15 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
+
+          <div className="mt-4 text-center">
+            <p className="text-sm text-[#475569]">
+              还没有账号？
+              <Link href="/register" className="text-[#1e3a5f] font-medium ml-1 hover:underline">
+                立即注册
+              </Link>
+            </p>
+          </div>
 
           <div className="mt-6 p-4 bg-[#f8fafc] rounded-lg border border-[#e2e8f0]">
             <p className="text-xs text-[#475569] font-medium mb-2">演示账号：</p>
