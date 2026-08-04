@@ -11,12 +11,14 @@ import {
   BarChart3,
   Settings,
   LogOut,
+  Sparkles,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
   { href: '/projects', label: '项目管理', icon: FolderKanban },
   { href: '/time-entries', label: '工时日报', icon: Clock },
+  { href: '/work-summary', label: '工作总结', icon: Sparkles },
   { href: '/analytics', label: '数据分析', icon: BarChart3 },
 ];
 

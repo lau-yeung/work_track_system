@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiDownload } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SimplePagination } from '@/components/simple-pagination';
-import { Plus, Edit, Trash2, Calendar } from 'lucide-react';
+import { Plus, Edit, Trash2, Calendar, Loader2, Download } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface TimeEntry {
@@ -55,6 +55,7 @@ export default function TimeEntriesPage() {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [filterProject, setFilterProject] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -66,6 +67,16 @@ export default function TimeEntriesPage() {
     completed_work: '',
     coordination_matters: '',
     tomorrow_plan: '',
+  });
+  const [showExport, setShowExport] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportForm, setExportForm] = useState({
+    dimension: 'month' as 'day' | 'week' | 'month' | 'year' | 'custom',
+    format: 'excel' as 'excel' | 'csv' | 'markdown',
+    date: new Date().toISOString().split('T')[0],
+    startDate: '',
+    endDate: '',
+    projectId: 'all',
   });
 
   const fetchEntries = useCallback(async () => {
@@ -107,19 +118,35 @@ export default function TimeEntriesPage() {
       toast.error('项目、工作日期和工时为必填');
       return;
     }
-    if (!form.completed_work) {
+    if (!form.completed_work.trim()) {
       toast.error('请填写今日完成工作');
       return;
     }
-    if (!form.tomorrow_plan) {
+    if (!form.tomorrow_plan.trim()) {
       toast.error('请填写明日计划工作');
       return;
     }
 
+    setSubmitting(true);
     try {
+      const hours = parseFloat(form.hours);
+      if (isNaN(hours) || hours <= 0 || hours > 24) {
+        toast.error('工时必须在 0-24 之间');
+        setSubmitting(false);
+        return;
+      }
+
       await apiFetch('/api/time-entries', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          project_id: parseInt(form.project_id),
+          work_date: form.work_date,
+          hours: String(hours),
+          remarks: form.remarks,
+          completed_work: form.completed_work,
+          coordination_matters: form.coordination_matters,
+          tomorrow_plan: form.tomorrow_plan,
+        }),
       });
       toast.success('工时填报成功');
       setShowCreate(false);
@@ -135,6 +162,8 @@ export default function TimeEntriesPage() {
       fetchEntries();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '填报失败');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -188,6 +217,69 @@ export default function TimeEntriesPage() {
     setStartDate('');
     setEndDate('');
     setPage(1);
+  };
+
+  const openExportDialog = () => {
+    // Prefill export form with current filter values for convenience
+    setExportForm((prev) => ({
+      ...prev,
+      date: new Date().toISOString().split('T')[0],
+      startDate: startDate || prev.startDate,
+      endDate: endDate || prev.endDate,
+      projectId: filterProject && filterProject !== 'all' ? filterProject : 'all',
+    }));
+    setShowExport(true);
+  };
+
+  const handleExport = async () => {
+    const { dimension, format, date, startDate: exStart, endDate: exEnd, projectId } = exportForm;
+
+    if (dimension === 'custom') {
+      if (!exStart || !exEnd) {
+        toast.error('自定义维度需要选择开始和结束日期');
+        return;
+      }
+      if (exStart > exEnd) {
+        toast.error('开始日期不能晚于结束日期');
+        return;
+      }
+    } else if (!date) {
+      toast.error('请选择日期');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('format', format);
+      params.set('dimension', dimension);
+      if (dimension === 'custom') {
+        params.set('startDate', exStart);
+        params.set('endDate', exEnd);
+      } else {
+        params.set('date', date);
+      }
+      if (projectId && projectId !== 'all') params.set('projectId', projectId);
+
+      const { blob, filename } = await apiDownload(`/api/time-entries/export?${params}`);
+
+      // Trigger browser download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success('导出成功');
+      setShowExport(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '导出失败');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const totalPages = Math.ceil(total / 20);
@@ -287,24 +379,30 @@ export default function TimeEntriesPage() {
           <h1 className="text-2xl font-bold text-[#1e3a5f]">工时日报</h1>
           <p className="text-sm text-[#475569] mt-1">填报和管理每日工时</p>
         </div>
-        <Button
-          onClick={() => {
-            setForm({
-              project_id: '',
-              work_date: new Date().toISOString().split('T')[0],
-              hours: '',
-              remarks: '',
-              completed_work: '',
-              coordination_matters: '',
-              tomorrow_plan: '',
-            });
-            setShowCreate(true);
-          }}
-          className="bg-[#1e3a5f] hover:bg-[#16304f]"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          填报工时
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={openExportDialog}>
+            <Download className="w-4 h-4 mr-2" />
+            导出日报
+          </Button>
+          <Button
+            onClick={() => {
+              setForm({
+                project_id: '',
+                work_date: new Date().toISOString().split('T')[0],
+                hours: '',
+                remarks: '',
+                completed_work: '',
+                coordination_matters: '',
+                tomorrow_plan: '',
+              });
+              setShowCreate(true);
+            }}
+            className="bg-[#1e3a5f] hover:bg-[#16304f]"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            填报工时
+          </Button>
+        </div>
       </div>
 
       {/* Filter */}
@@ -428,11 +526,18 @@ export default function TimeEntriesPage() {
           </DialogHeader>
           {entryForm(false)}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreate(false)}>
+            <Button variant="outline" onClick={() => setShowCreate(false)} disabled={submitting}>
               取消
             </Button>
-            <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleSubmit}>
-              提交
+            <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleSubmit} disabled={submitting}>
+              {submitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  提交中...
+                </>
+              ) : (
+                '提交'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -451,6 +556,144 @@ export default function TimeEntriesPage() {
             </Button>
             <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleEdit}>
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Export Dialog */}
+      <Dialog open={showExport} onOpenChange={setShowExport}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>导出工时日报</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>统计维度 *</Label>
+              <Select
+                value={exportForm.dimension}
+                onValueChange={(v) =>
+                  setExportForm({ ...exportForm, dimension: v as typeof exportForm.dimension })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择统计维度" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">按日</SelectItem>
+                  <SelectItem value="week">按周（周一至周日）</SelectItem>
+                  <SelectItem value="month">按月</SelectItem>
+                  <SelectItem value="year">按年</SelectItem>
+                  <SelectItem value="custom">自定义范围</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-[#64748b]">
+                {exportForm.dimension === 'day' && '导出所选日期当天的工时记录'}
+                {exportForm.dimension === 'week' && '导出所选日期所在周（周一至周日）的工时记录'}
+                {exportForm.dimension === 'month' && '导出所选日期所在月的工时记录'}
+                {exportForm.dimension === 'year' && '导出所选日期所在年的工时记录'}
+                {exportForm.dimension === 'custom' && '导出指定起止日期范围内的工时记录'}
+              </p>
+            </div>
+
+            {exportForm.dimension === 'custom' ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>开始日期 *</Label>
+                  <Input
+                    type="date"
+                    value={exportForm.startDate}
+                    onChange={(e) =>
+                      setExportForm({ ...exportForm, startDate: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>结束日期 *</Label>
+                  <Input
+                    type="date"
+                    value={exportForm.endDate}
+                    onChange={(e) =>
+                      setExportForm({ ...exportForm, endDate: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>基准日期 *</Label>
+                <Input
+                  type="date"
+                  value={exportForm.date}
+                  onChange={(e) => setExportForm({ ...exportForm, date: e.target.value })}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>项目（可选）</Label>
+              <Select
+                value={exportForm.projectId}
+                onValueChange={(v) => setExportForm({ ...exportForm, projectId: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="全部项目" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部项目</SelectItem>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>导出格式 *</Label>
+              <Select
+                value={exportForm.format}
+                onValueChange={(v) =>
+                  setExportForm({ ...exportForm, format: v as typeof exportForm.format })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="选择导出格式" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="excel">Excel (.xlsx)</SelectItem>
+                  <SelectItem value="csv">CSV (.csv)</SelectItem>
+                  <SelectItem value="markdown">Markdown (.md)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-[#64748b]">
+                {exportForm.format === 'excel' && '适合表格软件打开，含合并标题行与合计行'}
+                {exportForm.format === 'csv' && '通用纯文本格式，UTF-8 编码（含 BOM）'}
+                {exportForm.format === 'markdown' && '按日期分组的 Markdown 文档，便于阅读与归档'}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowExport(false)} disabled={exporting}>
+              取消
+            </Button>
+            <Button
+              className="bg-[#1e3a5f] hover:bg-[#16304f]"
+              onClick={handleExport}
+              disabled={exporting}
+            >
+              {exporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  导出中...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  导出
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

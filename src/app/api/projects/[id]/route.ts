@@ -22,12 +22,21 @@ export async function GET(
     if (error) throw new Error(`查询失败: ${error.message}`);
     if (!project) return NextResponse.json({ error: '项目不存在' }, { status: 404 });
 
-    // Get members
-    const { data: members, error: mError } = await client
+    // Get members with deduplication
+    const { data: allMembers, error: mError } = await client
       .from('project_members')
       .select('*, users(id, username, real_name, role)')
       .eq('project_id', id);
     if (mError) throw new Error(`查询成员失败: ${mError.message}`);
+
+    // Deduplicate by user_id
+    const seenIds = new Set<number>();
+    const members = (allMembers || []).filter((m: any) => {
+      const userId = m.user_id;
+      if (seenIds.has(userId)) return false;
+      seenIds.add(userId);
+      return true;
+    });
 
     // Get total hours
     const { data: entries, error: teError } = await client

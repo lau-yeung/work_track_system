@@ -47,4 +47,60 @@ export async function apiFetch<T = unknown>(
   return data as T;
 }
 
+/**
+ * Authenticated download wrapper - for file downloads (Excel/CSV/Markdown etc.).
+ * Returns a Blob on success. On error, parses JSON error message.
+ */
+export async function apiDownload(
+  url: string,
+  options: ApiFetchOptions = {}
+): Promise<{ blob: Blob; filename: string }> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/login';
+    throw new Error('登录已过期，请重新登录');
+  }
+
+  if (!res.ok) {
+    // Error responses are JSON
+    let message = '下载失败';
+    try {
+      const data = await res.json();
+      message = data.error || message;
+    } catch {
+      message = await res.text().catch(() => message);
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+
+  // Parse filename from Content-Disposition header
+  const disposition = res.headers.get('Content-Disposition') || '';
+  let filename = 'download';
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      filename = decodeURIComponent(utf8Match[1]);
+    } catch {
+      filename = utf8Match[1];
+    }
+  } else {
+    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+    if (plainMatch) filename = plainMatch[1];
+  }
+
+  return { blob, filename };
+}
+
 export type { SessionUser };

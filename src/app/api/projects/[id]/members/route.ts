@@ -13,12 +13,23 @@ export async function GET(
     const { id } = await params;
     const client = getSupabaseClient();
 
-    const { data, error } = await client
+    // Get all members with deduplication
+    const { data: allMembers, error } = await client
       .from('project_members')
       .select('*, users(id, username, real_name, role)')
       .eq('project_id', id);
 
     if (error) throw new Error(`查询成员失败: ${error.message}`);
+
+    // Deduplicate by user_id
+    const seenIds = new Set<number>();
+    const data = (allMembers || []).filter((m: any) => {
+      const userId = m.user_id;
+      if (seenIds.has(userId)) return false;
+      seenIds.add(userId);
+      return true;
+    });
+
     return NextResponse.json({ data });
   } catch (err) {
     const message = err instanceof Error ? err.message : '查询失败';
@@ -63,6 +74,22 @@ export async function POST(
     const newMemberIds = user_ids.filter((uid: number) => !existingIds.has(uid));
     if (newMemberIds.length === 0) {
       return NextResponse.json({ error: '所选用户已是项目成员' }, { status: 400 });
+    }
+
+    // The system "admin" account is reserved for special data handling
+    // and shall not be added to project membership.
+    const { data: candidateUsers, error: lookupError } = await client
+      .from('users')
+      .select('id, username, real_name')
+      .in('id', newMemberIds);
+    if (lookupError) throw new Error(`校验用户失败: ${lookupError.message}`);
+    const reserved = (candidateUsers || []).filter((u: { username: string }) => u.username === 'admin');
+    if (reserved.length > 0) {
+      const names = reserved.map((u: { real_name: string; username: string }) => `${u.real_name}(${u.username})`).join('、');
+      return NextResponse.json(
+        { error: `系统保留账号（${names}）不可加入项目成员` },
+        { status: 400 }
+      );
     }
 
     const members = newMemberIds.map((uid: number) => ({

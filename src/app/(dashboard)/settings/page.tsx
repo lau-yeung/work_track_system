@@ -34,7 +34,10 @@ const configLabels: Record<string, string> = {
   enable_ai_features: '启用AI功能',
   allow_user_registration: '允许用户注册',
   registration_approval_required: '注册需审核',
-  ai_api_key: 'AI API密钥',
+  ai_provider: 'AI服务类型',
+  ai_api_endpoint: 'API端点',
+  ai_api_key: 'API密钥',
+  ai_model: '模型名称',
 };
 
 export default function SettingsPage() {
@@ -225,32 +228,26 @@ export default function SettingsPage() {
           <CardContent className="space-y-6">
             {loading ? (
               <div className="space-y-4">
-                {[1, 2].map((i) => (
+                {[1, 2, 3, 4].map((i) => (
                   <div key={i} className="h-12 bg-gray-100 animate-pulse rounded" />
                 ))}
               </div>
             ) : (
-              configs
-                .filter((c) => ['enable_ai_features', 'ai_api_key'].includes(c.config_key))
-                .map((config) => (
-                  <div key={config.id} className="flex items-start gap-4">
-                    <div className="w-44 shrink-0">
-                      <Label className="text-sm font-medium text-[#1e3a5f]">
-                        {configLabels[config.config_key] || config.config_key}
-                      </Label>
-                      {config.description && (
-                        <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
-                      )}
-                    </div>
-                    <div className="flex-1 max-w-xs">
-                      {config.config_key === 'ai_api_key' ? (
-                        <Input
-                          type="password"
-                          value={config.config_value}
-                          onChange={(e) => updateConfig(config.config_key, e.target.value)}
-                          placeholder="输入AI API密钥"
-                        />
-                      ) : config.config_type === 'boolean' ? (
+              <>
+                {/* Enable AI Features */}
+                {configs
+                  .filter((c) => c.config_key === 'enable_ai_features')
+                  .map((config) => (
+                    <div key={config.id} className="flex items-start gap-4">
+                      <div className="w-44 shrink-0">
+                        <Label className="text-sm font-medium text-[#1e3a5f]">
+                          {configLabels[config.config_key] || config.config_key}
+                        </Label>
+                        {config.description && (
+                          <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                        )}
+                      </div>
+                      <div className="flex-1 max-w-xs">
                         <Select
                           value={config.config_value}
                           onValueChange={(v) => updateConfig(config.config_key, v)}
@@ -263,16 +260,117 @@ export default function SettingsPage() {
                             <SelectItem value="false">关闭</SelectItem>
                           </SelectContent>
                         </Select>
-                      ) : (
-                        <Input
-                          type={config.config_type === 'number' ? 'number' : 'text'}
-                          value={config.config_value}
-                          onChange={(e) => updateConfig(config.config_key, e.target.value)}
-                        />
-                      )}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  ))}
+
+                {/* AI Provider */}
+                {configs
+                  .filter((c) => c.config_key === 'ai_provider')
+                  .map((config) => (
+                    <div key={config.id} className="flex items-start gap-4">
+                      <div className="w-44 shrink-0">
+                        <Label className="text-sm font-medium text-[#1e3a5f]">
+                          {configLabels[config.config_key] || config.config_key}
+                        </Label>
+                        {config.description && (
+                          <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                        )}
+                      </div>
+                      <div className="flex-1 max-w-xs">
+                        <Select
+                          value={config.config_value}
+                          onValueChange={(v) => updateConfig(config.config_key, v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="builtin">内置AI（规则引擎）</SelectItem>
+                            <SelectItem value="external">外部AI（OpenAI/DeepSeek等）</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ))}
+
+                {/* External AI Config - show only when provider is 'external' */}
+                {configs.find((c) => c.config_key === 'ai_provider')?.config_value === 'external' && (
+                  <>
+                    {/* API Endpoint */}
+                    {configs
+                      .filter((c) => c.config_key === 'ai_api_endpoint')
+                      .map((config) => (
+                        <div key={config.id} className="flex items-start gap-4">
+                          <div className="w-44 shrink-0">
+                            <Label className="text-sm font-medium text-[#1e3a5f]">
+                              {configLabels[config.config_key] || config.config_key}
+                            </Label>
+                            {config.description && (
+                              <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                            )}
+                          </div>
+                          <div className="flex-1 max-w-md">
+                            <Input
+                              type="text"
+                              value={config.config_value}
+                              onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                              placeholder="https://api.deepseek.com/v1"
+                            />
+                          </div>
+                        </div>
+                      ))}
+
+                    {/* API Key */}
+                    {configs
+                      .filter((c) => c.config_key === 'ai_api_key')
+                      .map((config) => (
+                        <div key={config.id} className="flex items-start gap-4">
+                          <div className="w-44 shrink-0">
+                            <Label className="text-sm font-medium text-[#1e3a5f]">
+                              {configLabels[config.config_key] || config.config_key}
+                            </Label>
+                            {config.description && (
+                              <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                            )}
+                          </div>
+                          <div className="flex-1 max-w-md">
+                            <Input
+                              type="password"
+                              value={config.config_value}
+                              onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                              placeholder="sk-..."
+                            />
+                          </div>
+                        </div>
+                      ))}
+
+                    {/* Model */}
+                    {configs
+                      .filter((c) => c.config_key === 'ai_model')
+                      .map((config) => (
+                        <div key={config.id} className="flex items-start gap-4">
+                          <div className="w-44 shrink-0">
+                            <Label className="text-sm font-medium text-[#1e3a5f]">
+                              {configLabels[config.config_key] || config.config_key}
+                            </Label>
+                            {config.description && (
+                              <p className="text-xs text-[#94a3b8] mt-0.5">{config.description}</p>
+                            )}
+                          </div>
+                          <div className="flex-1 max-w-xs">
+                            <Input
+                              type="text"
+                              value={config.config_value}
+                              onChange={(e) => updateConfig(config.config_key, e.target.value)}
+                              placeholder="deepseek-chat / gpt-4o / ..."
+                            />
+                          </div>
+                        </div>
+                      ))}
+                  </>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

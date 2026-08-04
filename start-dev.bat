@@ -1,49 +1,41 @@
 @echo off
+chcp 65001 >nul
 title Work Hours Management - Dev Server
 
 cd /d "%~dp0"
 
 echo ========================================
-echo   Work Hours System - Quick Start
+echo   工时管理系统 - 开发模式
 echo ========================================
 echo.
 
-where pnpm >nul 2>&1
+REM Check node
+where node >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] pnpm not found. Please install Node.js and pnpm first.
-    echo Run: npm install -g pnpm
+    echo [ERROR] 未检测到 Node.js，请先安装 Node.js。
     pause
     exit /b 1
 )
 
-echo [1/3] Checking dependencies...
 if not exist "node_modules" (
-    echo Installing dependencies, please wait...
-    pnpm install
+    echo [1/2] 首次安装依赖，请稍候...
+    call pnpm install
     if errorlevel 1 (
-        echo [ERROR] Dependency installation failed.
+        echo [ERROR] 依赖安装失败。
         pause
         exit /b 1
     )
 ) else (
-    echo Dependencies ready.
+    echo [1/2] 依赖检查完成。
 )
 
 echo.
-echo [2/3] Starting dev server on port 5000...
+echo [2/2] 启动开发服务器（支持热更新）...
 echo.
 
-start "Next.js Dev Server" cmd /k "cd /d ""%~dp0"" && set PORT=5000 && pnpm next dev -p 5000"
+REM 使用 next dev 直接启动，比 tsx watch 更稳定
+set PORT=5000
+set NODE_ENV=development
+call node node_modules\next\dist\bin\next dev -p 5000
 
-echo [3/3] Opening browser in 8 seconds...
-timeout /t 8 /nobreak >nul
-start http://localhost:5000
-
-echo.
-echo ========================================
-echo   Started successfully!
-echo   URL: http://localhost:5000
-echo   Close the dev server window to stop.
-echo ========================================
-echo.
 pause

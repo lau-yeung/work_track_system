@@ -50,12 +50,12 @@ export async function GET(request: NextRequest) {
     if (error) throw new Error(`查询失败: ${error.message}`);
 
     // Use a single query to get all actual hours (avoid N+1 problem)
-    const projectIds = (data || []).map((p: any) => p.id);
-    const { data: hoursData } = projectIds.length > 0
+    const fetchedProjectIds = (data || []).map((p: any) => p.id);
+    const { data: hoursData } = fetchedProjectIds.length > 0
       ? await client
           .from('time_entries')
           .select('project_id, hours')
-          .in('project_id', projectIds)
+          .in('project_id', fetchedProjectIds)
       : { data: [] };
 
     const hoursMap = new Map<number, number>();
@@ -92,7 +92,30 @@ export async function POST(request: NextRequest) {
 
     const client = getSupabaseClient();
 
+    // The system "admin" account is reserved for special data handling
+    // and shall not be assigned as project owner or member.
+    const candidateIds = [...new Set([Number(owner_id), ...((member_ids as number[]) || [])])].filter(
+      (id) => !Number.isNaN(id)
+    );
+    if (candidateIds.length > 0) {
+      const { data: candidateUsers, error: lookupError } = await client
+        .from('users')
+        .select('id, username, real_name')
+        .in('id', candidateIds);
+      if (lookupError) throw new Error(`校验用户失败: ${lookupError.message}`);
+      const reserved = (candidateUsers || []).filter((u: { username: string }) => u.username === 'admin');
+      if (reserved.length > 0) {
+        const names = reserved.map((u: { real_name: string; username: string }) => `${u.real_name}(${u.username})`).join('、');
+        return NextResponse.json(
+          { error: `系统保留账号（${names}）不可作为项目负责人或成员` },
+          { status: 400 }
+        );
+      }
+    }
+
     // Create project
+    // Empty date strings must be converted to null: PostgreSQL date columns
+    // reject "" with "invalid input syntax for type date".
     const { data: project, error } = await client
       .from('projects')
       .insert({
@@ -100,8 +123,8 @@ export async function POST(request: NextRequest) {
         description,
         owner_id,
         estimated_hours: String(estimated_hours),
-        start_date,
-        end_date,
+        start_date: start_date || null,
+        end_date: end_date || null,
       })
       .select('*, users!projects_owner_id_fkey(id, real_name, username)')
       .single();

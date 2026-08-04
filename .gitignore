@@ -10,8 +10,15 @@ __pycache__/
 *.a
 /vendor
 *.egg-info/
+
+# 环境变量与敏感配置（.env.example 例外）
 /.env
 .env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+.coze
 .cozeproj/reduction
 
 # JS/TS bundlers & build outputs
@@ -24,8 +31,20 @@ __pycache__/
 coverage
 storybook-static
 
-# Package manager artifacts
-pnpm-lock.yaml
+# TypeScript 构建缓存
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# 发布包输出目录
+dist-release/
+
+# 内部测试环境专用脚本（不发布）
+scripts/heartbeat.bat
+scripts/setup-heartbeat.bat
+start.bat
+.cozeproj/
+
+# Package manager artifacts（pnpm-lock.yaml 需要提交以保证可复现构建）
 package-lock.json
 yarn.lock
 .pnp*

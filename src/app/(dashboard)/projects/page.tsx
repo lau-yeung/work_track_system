@@ -207,6 +207,9 @@ export default function ProjectsPage() {
     });
   };
 
+  // The system "admin" account is reserved for special data handling
+  // and must not appear in project owner / member selection UIs.
+  const nonAdminUsers = users.filter((u) => u.username !== 'admin');
   const totalPages = Math.ceil(total / 20);
 
   return (
@@ -385,7 +388,7 @@ export default function ProjectsPage() {
                     <SelectValue placeholder="选择负责人" />
                   </SelectTrigger>
                   <SelectContent>
-                    {users
+                    {nonAdminUsers
                       .filter((u) => u.role === 'admin' || u.role === 'pm')
                       .map((u) => (
                         <SelectItem key={u.id} value={String(u.id)}>
@@ -443,7 +446,7 @@ export default function ProjectsPage() {
             <div className="space-y-2">
               <Label>项目成员</Label>
               <div className="max-h-40 overflow-y-auto border rounded-lg p-2 space-y-1">
-                {users.map((u) => (
+                {nonAdminUsers.map((u) => (
                   <label
                     key={u.id}
                     className="flex items-center gap-2 p-1.5 hover:bg-gray-50 rounded cursor-pointer text-sm"
@@ -614,7 +617,7 @@ export default function ProjectsPage() {
                       <SelectValue placeholder="选择用户" />
                     </SelectTrigger>
                     <SelectContent>
-                      {users
+                      {nonAdminUsers
                         .filter(
                           (u) =>
                             !memberList.some((m) => m.users.id === u.id)

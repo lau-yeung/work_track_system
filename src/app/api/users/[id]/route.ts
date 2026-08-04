@@ -85,11 +85,58 @@ export async function DELETE(
     }
 
     const { id } = await params;
-    const client = getSupabaseClient();
-    const { error } = await client.from('users').delete().eq('id', id);
-    if (error) throw new Error(`删除失败: ${error.message}`);
+    const userId = parseInt(id);
+    
+    // Cannot delete self
+    if (currentUser.id === userId) {
+      return NextResponse.json({ error: '不能删除自己的账号' }, { status: 400 });
+    }
 
-    return NextResponse.json({ message: '删除成功' });
+    const client = getSupabaseClient();
+
+    // Step 1: Delete time entries associated with this user
+    const { error: teError } = await client
+      .from('time_entries')
+      .delete()
+      .eq('user_id', userId);
+    if (teError) throw new Error(`删除工时记录失败: ${teError.message}`);
+
+    // Step 2: Delete project memberships
+    const { error: pmError } = await client
+      .from('project_members')
+      .delete()
+      .eq('user_id', userId);
+    if (pmError) throw new Error(`删除项目成员关系失败: ${pmError.message}`);
+
+    // Step 3: Handle projects owned by this user - transfer ownership or set to NULL
+    // First check if there are owned projects
+    const { data: ownedProjects, error: opError } = await client
+      .from('projects')
+      .select('id')
+      .eq('owner_id', userId);
+    
+    if (opError) throw new Error(`查询负责项目失败: ${opError.message}`);
+
+    if (ownedProjects && ownedProjects.length > 0) {
+      // Transfer ownership to the current admin user
+      const { error: updateError } = await client
+        .from('projects')
+        .update({ owner_id: currentUser.id })
+        .eq('owner_id', userId);
+      if (updateError) throw new Error(`转移项目负责人失败: ${updateError.message}`);
+    }
+
+    // Step 4: Delete the user
+    const { error: deleteError } = await client
+      .from('users')
+      .delete()
+      .eq('id', userId);
+    if (deleteError) throw new Error(`删除用户失败: ${deleteError.message}`);
+
+    return NextResponse.json({ 
+      message: '删除成功',
+      transferredProjects: ownedProjects?.length || 0
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : '删除失败';
     return NextResponse.json({ error: message }, { status: 500 });
