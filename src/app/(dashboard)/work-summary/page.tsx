@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -15,10 +16,32 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Sparkles, Loader2, FileText, AlertCircle, Database, Copy, CheckCircle, Calendar } from 'lucide-react';
+import { 
+  Sparkles, 
+  Loader2, 
+  FileText, 
+  AlertCircle, 
+  Database, 
+  Copy, 
+  CheckCircle, 
+  Calendar,
+  Settings,
+  Bot,
+  Zap
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 type Dimension = 'week' | 'last_week' | 'month' | 'last_month' | 'year' | 'last_year' | 'custom';
+
+interface AIStatus {
+  enabled: boolean;
+  provider: 'builtin' | 'external';
+  isConfigured: boolean;
+  configComplete: boolean;
+  message: string;
+  endpoint?: string;
+  model?: string;
+}
 
 interface WorkSummary {
   id: number;
@@ -29,6 +52,7 @@ interface WorkSummary {
   generated_at: string;
   users?: { id: number; real_name: string; username: string };
   projects?: { id: number; name: string } | null;
+  used_external_ai?: boolean;
 }
 
 interface ProjectOption {
@@ -60,7 +84,6 @@ const formatDate = (date: string) => {
   return new Date(date).toLocaleDateString('zh-CN');
 };
 
-// Calculate date range for display
 function getDateRangeDisplay(dimension: Dimension, startDate?: string, endDate?: string): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -115,6 +138,7 @@ function getDateRangeDisplay(dimension: Dimension, startDate?: string, endDate?:
 
 export default function WorkSummaryPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const [summaries, setSummaries] = useState<WorkSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -129,6 +153,7 @@ export default function WorkSummaryPage() {
   const [copied, setCopied] = useState<'create' | 'migration' | null>(null);
   const [customStartDate, setCustomStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [customEndDate, setCustomEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
 
   const fetchSummaries = async () => {
     setLoading(true);
@@ -148,6 +173,15 @@ export default function WorkSummaryPage() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAIStatus = async () => {
+    try {
+      const data = await apiFetch<{ data: AIStatus }>('/api/ai/config-status');
+      setAiStatus(data.data);
+    } catch {
+      setAiStatus(null);
     }
   };
 
@@ -213,6 +247,7 @@ export default function WorkSummaryPage() {
 
   useEffect(() => {
     fetchProjects();
+    fetchAIStatus();
   }, []);
 
   const handleGenerate = async () => {
@@ -238,33 +273,39 @@ export default function WorkSummaryPage() {
       }
       if (projectId && projectId !== 'all') body.projectId = parseInt(projectId);
 
-      const resp = await apiFetch<{ data: WorkSummary; saved?: boolean }>('/api/ai/work-summary', {
+      const resp = await apiFetch<{ data: WorkSummary; saved?: boolean; used_external_ai?: boolean }>('/api/ai/work-summary', {
         method: 'POST',
         body: JSON.stringify(body),
       });
 
       if (resp.data) {
         const saved = resp.saved;
+        const usedExternalAI = resp.used_external_ai ?? resp.data.used_external_ai ?? false;
         
         if (saved !== false) {
-          // 保存成功，刷新列表
-          toast.success('工作总结生成成功');
+          if (usedExternalAI) {
+            toast.success('AI工作总结生成成功');
+          } else {
+            toast.success('工作总结已生成（使用默认模板）');
+          }
           fetchSummaries();
         } else {
-          // 保存失败（可能是数据库约束限制），添加到临时显示
           toast.warning('总结已生成但未保存，请执行数据库迁移');
-          // 自动获取迁移SQL
           fetchInitSql();
         }
         setSelectedSummary(resp.data);
         
-        // 将新生成的总结添加到列表（如果已保存则刷新，未保存则临时添加）
         if (saved === false) {
           setSummaries(prev => {
             const exists = prev.some(s => s.id === resp.data.id);
             if (exists) return prev;
             return [resp.data, ...prev];
           });
+        }
+
+        // Update AI status after generation
+        if (!usedExternalAI) {
+          fetchAIStatus();
         }
       }
     } catch (err) {
@@ -281,7 +322,13 @@ export default function WorkSummaryPage() {
     }
   };
 
+  const handleGoToSettings = () => {
+    router.push('/settings');
+  };
+
   const currentDateRange = getDateRangeDisplay(dimension, customStartDate, customEndDate);
+  const aiNotConfigured = aiStatus && !aiStatus.isConfigured;
+  const aiConfigured = aiStatus && aiStatus.isConfigured;
 
   return (
     <div>
@@ -309,6 +356,59 @@ export default function WorkSummaryPage() {
           )}
         </Button>
       </div>
+
+      {/* AI Configuration Warning */}
+      {aiNotConfigured && (
+        <Card className="mb-4 border-blue-200 bg-blue-50">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <Bot className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-blue-900 mb-1 flex items-center gap-2">
+                  AI 尚未配置
+                  <span className="text-xs font-normal text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">
+                    将使用默认模板生成
+                  </span>
+                </h3>
+                <p className="text-sm text-blue-800 mb-3">
+                  {aiStatus?.message || '您尚未配置外部 AI 服务，生成的总结将使用内置模板。配置 AI 后可获得更智能的分析。'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={handleGoToSettings}
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    <Settings className="w-4 h-4 mr-2" />
+                    前往配置
+                  </Button>
+                  <Button
+                    onClick={handleGenerate}
+                    disabled={generating}
+                    size="sm"
+                    variant="outline"
+                    className="border-blue-300 text-blue-700 hover:bg-blue-100"
+                  >
+                    仍使用默认模板生成
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* AI Configured Indicator */}
+      {aiConfigured && (
+        <div className="mb-4 flex items-center gap-2 text-xs text-green-700 bg-green-50 px-3 py-2 rounded border border-green-200">
+          <Zap className="w-4 h-4" />
+          <span>
+            外部AI已配置
+            {aiStatus?.model && ` (${aiStatus.model})`}
+            ，将使用智能分析生成总结
+          </span>
+        </div>
+      )}
 
       {/* Table Missing Warning */}
       {tableMissing && (
@@ -412,7 +512,7 @@ export default function WorkSummaryPage() {
                   onChange={(e) => setCustomStartDate(e.target.value)}
                   className="w-40"
                 />
-                <span className="text-[#475569]">至</span>
+                <span className="text-[#47559]">至</span>
                 <Input
                   type="date"
                   value={customEndDate}
@@ -480,6 +580,7 @@ export default function WorkSummaryPage() {
                   <TableRow>
                     <TableHead>周期</TableHead>
                     <TableHead>项目</TableHead>
+                    <TableHead>AI来源</TableHead>
                     <TableHead>生成时间</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -494,6 +595,19 @@ export default function WorkSummaryPage() {
                         {formatDate(s.period_start)} ~ {formatDate(s.period_end)}
                       </TableCell>
                       <TableCell>{s.projects?.name || '全部'}</TableCell>
+                      <TableCell>
+                        {s.used_external_ai ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                            <Zap className="w-3 h-3" />
+                            外部AI
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded">
+                            <Bot className="w-3 h-3" />
+                            内置模板
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm text-[#475569]">
                         {new Date(s.generated_at).toLocaleString('zh-CN')}
                       </TableCell>
@@ -508,16 +622,31 @@ export default function WorkSummaryPage() {
         {/* Detail */}
         <Card className="lg:col-span-2 border-[#e2e8f0]">
           <CardHeader>
-            <CardTitle className="text-base font-semibold text-[#1e3a5f]">
-              {selectedSummary ? (
-                <>
-                  {DIMENSION_LABELS[selectedSummary.dimension]} - {formatDate(selectedSummary.period_start)} 至{' '}
-                  {formatDate(selectedSummary.period_end)}
-                </>
-              ) : (
-                '总结详情'
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-semibold text-[#1e3a5f]">
+                {selectedSummary ? (
+                  <>
+                    {DIMENSION_LABELS[selectedSummary.dimension]} - {formatDate(selectedSummary.period_start)} 至{' '}
+                    {formatDate(selectedSummary.period_end)}
+                  </>
+                ) : (
+                  '总结详情'
+                )}
+              </CardTitle>
+              {selectedSummary?.used_external_ai !== undefined && (
+                <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded ${
+                  selectedSummary.used_external_ai
+                    ? 'text-green-700 bg-green-50 border border-green-200'
+                    : 'text-gray-600 bg-gray-50 border border-gray-200'
+                }`}>
+                  {selectedSummary.used_external_ai ? (
+                    <><Zap className="w-3 h-3" /> 外部AI生成</>
+                  ) : (
+                    <><Bot className="w-3 h-3" /> 默认模板</>
+                  )}
+                </span>
               )}
-            </CardTitle>
+            </div>
           </CardHeader>
           <CardContent>
             {selectedSummary ? (

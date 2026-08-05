@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
       dimension === 'month' || dimension === 'last_month' ? 'month' :
       dimension === 'year' || dimension === 'last_year' ? 'year' : 'custom';
 
-    const summaryContent = await generateWorkSummary({
+    const summaryResult = await generateWorkSummary({
       dimension: semanticDimension,
       startDate: start,
       endDate: end,
@@ -282,6 +282,9 @@ export async function POST(request: NextRequest) {
       entries: summaryEntries,
       previousSummary,
     });
+
+    const summaryContent = summaryResult.content;
+    const usedExternalAI = summaryResult.usedExternalAI;
 
     // Save summary to database
     const summaryRecord = {
@@ -318,8 +321,10 @@ export async function POST(request: NextRequest) {
         period_end: end,
         summary_content: summaryContent,
         generated_at: new Date().toISOString(),
+        used_external_ai: usedExternalAI,
       },
       saved,
+      used_external_ai: usedExternalAI,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : '生成失败';

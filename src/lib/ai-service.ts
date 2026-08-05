@@ -12,6 +12,16 @@ export interface AIConfig {
   model?: string;
 }
 
+export interface AIStatus {
+  enabled: boolean;
+  provider: 'builtin' | 'external';
+  isConfigured: boolean;
+  configComplete: boolean;
+  message: string;
+  endpoint?: string;
+  model?: string;
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -52,16 +62,95 @@ export async function getAIConfig(): Promise<AIConfig | null> {
 }
 
 /**
+ * Get AI configuration status for frontend display
+ */
+export async function getAIStatus(): Promise<AIStatus> {
+  const client = getSupabaseClient();
+  const { data: configs, error } = await client
+    .from('system_configs')
+    .select('config_key, config_value')
+    .in('config_key', ['ai_provider', 'ai_api_endpoint', 'ai_api_key', 'ai_model', 'enable_ai_features']);
+
+  if (error || !configs) {
+    return {
+      enabled: false,
+      provider: 'builtin',
+      isConfigured: false,
+      configComplete: false,
+      message: '无法读取AI配置',
+    };
+  }
+
+  const configMap = Object.fromEntries(configs.map((c) => [c.config_key, c.config_value]));
+  const enabled = configMap.enable_ai_features === 'true';
+  const provider = (configMap.ai_provider as 'builtin' | 'external') || 'builtin';
+  const endpoint = (configMap.ai_api_endpoint || '').trim();
+  const apiKey = (configMap.ai_api_key || '').trim();
+  const model = (configMap.ai_model || '').trim();
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      provider,
+      isConfigured: false,
+      configComplete: false,
+      message: 'AI功能未启用，当前将使用默认模板生成总结',
+    };
+  }
+
+  if (provider === 'builtin') {
+    return {
+      enabled: true,
+      provider,
+      isConfigured: true,
+      configComplete: true,
+      message: '使用内置AI（规则引擎）生成总结',
+    };
+  }
+
+  const configComplete = !!(endpoint && apiKey && model);
+
+  if (!configComplete) {
+    const missing: string[] = [];
+    if (!endpoint) missing.push('API端点');
+    if (!apiKey) missing.push('API密钥');
+    if (!model) missing.push('模型名称');
+    return {
+      enabled: true,
+      provider,
+      isConfigured: false,
+      configComplete: false,
+      message: `外部AI配置不完整，缺少: ${missing.join('、')}。当前将使用默认模板生成总结`,
+      endpoint: endpoint || undefined,
+      model: model || undefined,
+    };
+  }
+
+  return {
+    enabled: true,
+    provider,
+    isConfigured: true,
+    configComplete: true,
+    message: '外部AI已配置，可使用智能分析',
+    endpoint,
+    model,
+  };
+}
+
+/**
  * Call AI chat completion API
  * For external AI, uses OpenAI-compatible API format
+ * Falls back to builtin AI when external AI is not configured
  */
 export async function callAI(
   messages: ChatMessage[],
   options?: { temperature?: number; maxTokens?: number }
 ): Promise<AIResponse> {
   const config = await getAIConfig();
+  
   if (!config) {
-    throw new Error('AI功能未启用');
+    // AI not enabled or not configured, fall back to builtin
+    return callBuiltinAI(messages);
   }
 
   if (config.provider === 'builtin') {
@@ -69,7 +158,8 @@ export async function callAI(
   }
 
   if (!config.apiEndpoint || !config.apiKey || !config.model) {
-    throw new Error('外部AI配置不完整，请检查API端点、密钥和模型名称');
+    // External AI config incomplete, fall back to builtin
+    return callBuiltinAI(messages);
   }
 
   return callExternalAI(config, messages, options);
@@ -184,6 +274,16 @@ async function callExternalAI(
   };
 }
 
+export interface WorkSummaryResult {
+  content: string;
+  usedExternalAI: boolean;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
 /**
  * Generate work summary based on daily reports
  * Optimized for large datasets: uses aggregation to reduce prompt size
@@ -204,7 +304,7 @@ export async function generateWorkSummary(params: {
     user_name: string;
   }>;
   previousSummary?: string | null;
-}): Promise<string> {
+}): Promise<WorkSummaryResult> {
   const { dimension, entries, previousSummary } = params;
 
   // Import the optimizer
@@ -222,10 +322,17 @@ export async function generateWorkSummary(params: {
   );
 
   // Step 3: Call AI with optimized prompts
+  const config = await getAIConfig();
+  const usedExternalAI = !!(config && config.provider === 'external' && config.apiEndpoint && config.apiKey && config.model);
+  
   const response = await callAI([
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt },
   ]);
 
-  return response.content;
+  return {
+    content: response.content,
+    usedExternalAI,
+    usage: response.usage,
+  };
 }

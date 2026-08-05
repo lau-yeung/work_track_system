@@ -234,9 +234,9 @@ A: 检查 `.env.local` 中的 Supabase 凭证是否正确，确认网络可访�
 A: 在「系统设置」页面配置 AI 服务，或在 `.env.local` 中添加：
 ```env
 AI_PROVIDER=external
-AI_API_ENDPOINT=https://api.deepseek.com/v1
+AI_API_ENDPOINT=https://api.deepseek.com
 AI_API_KEY=your-api-key
-AI_MODEL=deepseek-chat
+AI_MODEL=deepseek-v4-flash
 ```
 
 ### Q: 如何升级到新版本？

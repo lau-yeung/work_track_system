@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
-import { Save } from 'lucide-react';
+import { Save, Play, Loader2 } from 'lucide-react';
 
 interface ConfigItem {
   id: number;
@@ -46,6 +46,7 @@ export default function SettingsPage() {
   const [configs, setConfigs] = useState<ConfigItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (user && user.role !== 'admin') {
@@ -81,6 +82,43 @@ export default function SettingsPage() {
       toast.error(err instanceof Error ? err.message : '保存失败');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    // First save current configs, then test
+    setTesting(true);
+    try {
+      // Save configs first so the test endpoint reads the latest values
+      await apiFetch('/api/system-configs', {
+        method: 'PUT',
+        body: JSON.stringify({
+          configs: configs.map((c) => ({
+            config_key: c.config_key,
+            config_value: c.config_value,
+          })),
+        }),
+      });
+
+      const result = await apiFetch<{
+        success: boolean;
+        message: string;
+        config?: { endpoint: string; model: string; apiKey: string };
+        response?: { content: string; promptTokens: number; completionTokens: number; totalTokens: number };
+        elapsed?: number;
+        httpStatus?: number;
+        errorDetail?: string;
+      }>('/api/ai/test-connection', { method: 'POST' });
+
+      if (result.success) {
+        toast.success(`${result.message} (${result.elapsed}ms)`);
+      } else {
+        toast.error(`${result.message}${result.errorDetail ? ': ' + result.errorDetail : ''}`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '连接测试失败');
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -315,7 +353,7 @@ export default function SettingsPage() {
                               type="text"
                               value={config.config_value}
                               onChange={(e) => updateConfig(config.config_key, e.target.value)}
-                              placeholder="https://api.deepseek.com/v1"
+                              placeholder="https://api.deepseek.com"
                             />
                           </div>
                         </div>
@@ -363,11 +401,40 @@ export default function SettingsPage() {
                               type="text"
                               value={config.config_value}
                               onChange={(e) => updateConfig(config.config_key, e.target.value)}
-                              placeholder="deepseek-chat / gpt-4o / ..."
+                              placeholder="deepseek-v4-flash / deepseek-v4-pro"
                             />
                           </div>
                         </div>
                       ))}
+
+                    {/* Test Connection Button */}
+                    <div className="flex items-start gap-4 pt-2">
+                      <div className="w-44 shrink-0" />
+                      <div className="flex-1 max-w-md">
+                        <Button
+                          type="button"
+                          onClick={handleTestConnection}
+                          disabled={testing}
+                          variant="outline"
+                          className="w-full sm:w-auto border-[#1e3a5f] text-[#1e3a5f] hover:bg-[#1e3a5f] hover:text-white"
+                        >
+                          {testing ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              测试中...
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-4 h-4 mr-2" />
+                              测试AI连接
+                            </>
+                          )}
+                        </Button>
+                        <p className="text-xs text-[#94a3b8] mt-2">
+                          保存当前配置并测试与AI服务的连通性，确认API密钥和端点是否正确
+                        </p>
+                      </div>
+                    </div>
                   </>
                 )}
               </>

@@ -12,9 +12,9 @@ const DEFAULT_CONFIGS = [
   { config_key: 'registration_approval_required', config_value: 'true', config_type: 'boolean', description: '注册用户是否需要审核' },
   // AI Configuration
   { config_key: 'ai_provider', config_value: 'builtin', config_type: 'string', description: 'AI服务提供商（builtin=内置AI, external=外部AI）' },
-  { config_key: 'ai_api_endpoint', config_value: '', config_type: 'string', description: '外部AI API端点（如 https://api.deepseek.com/v1）' },
+  { config_key: 'ai_api_endpoint', config_value: '', config_type: 'string', description: '外部AI API端点（如 https://api.deepseek.com）' },
   { config_key: 'ai_api_key', config_value: '', config_type: 'string', description: '外部AI API密钥' },
-  { config_key: 'ai_model', config_value: '', config_type: 'string', description: 'AI模型名称（如 deepseek-chat、gpt-4o等）' },
+  { config_key: 'ai_model', config_value: '', config_type: 'string', description: 'AI模型名称（如 deepseek-v4-flash、deepseek-v4-pro 等）' },
 ];
 
 export async function GET(request: NextRequest) {
