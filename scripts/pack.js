@@ -40,7 +40,6 @@ const EXCLUDE_PATTERNS = [
   '.cache',
   'projects',          // 内部测试项目数据
   'start-dev.bat',     // 内部开发脚本
-  'start.bat',         // 内部启动脚本
   'scripts/heartbeat.bat',
   'scripts/setup-heartbeat.bat',
   '.coze',

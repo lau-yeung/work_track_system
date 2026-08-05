@@ -41,7 +41,6 @@ dist-release/
 # 内部测试环境专用脚本（不发布）
 scripts/heartbeat.bat
 scripts/setup-heartbeat.bat
-start.bat
 .cozeproj/
 
 # Package manager artifacts（pnpm-lock.yaml 需要提交以保证可复现构建）
