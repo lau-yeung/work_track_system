@@ -10,6 +10,7 @@ const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS work_summaries (
   period_start DATE NOT NULL,
   period_end DATE NOT NULL,
   summary_content TEXT NOT NULL,
+  used_external_ai BOOLEAN DEFAULT FALSE,
   generated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id, project_id, dimension, period_start)
@@ -25,7 +26,11 @@ ALTER TABLE work_summaries
   
 ALTER TABLE work_summaries 
   ADD CONSTRAINT work_summaries_dimension_check 
-  CHECK (dimension IN ('week', 'last_week', 'month', 'last_month', 'year', 'last_year', 'custom'));`;
+  CHECK (dimension IN ('week', 'last_week', 'month', 'last_month', 'year', 'last_year', 'custom'));
+
+-- 添加 used_external_ai 字段（用于区分AI来源）
+ALTER TABLE work_summaries 
+  ADD COLUMN IF NOT EXISTS used_external_ai BOOLEAN DEFAULT FALSE;`;
 
 /**
  * GET /api/init-ai-tables - Get SQL for manual table creation/migration

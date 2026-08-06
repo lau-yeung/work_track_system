@@ -294,6 +294,7 @@ export async function POST(request: NextRequest) {
       period_start: start,
       period_end: end,
       summary_content: summaryContent,
+      used_external_ai: usedExternalAI,
       generated_at: new Date().toISOString(),
     };
 
