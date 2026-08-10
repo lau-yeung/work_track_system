@@ -24,8 +24,9 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SimplePagination } from '@/components/simple-pagination';
-import { Plus, Edit, Trash2, Calendar, Loader2, Download } from 'lucide-react';
+import { Plus, Edit, Trash2, Calendar, Loader2, Download, Layers } from 'lucide-react';
 import { toast } from 'sonner';
+import { BatchEntryDialog } from './batch-entry-dialog';
 
 interface TimeEntry {
   id: number;
@@ -44,6 +45,12 @@ interface ProjectOption {
   id: number;
   name: string;
   status: string;
+}
+
+interface TimeEntryMutationResult {
+  data: TimeEntry;
+  daily_total: number;
+  is_below_minimum: boolean;
 }
 
 export default function TimeEntriesPage() {
@@ -70,6 +77,8 @@ export default function TimeEntriesPage() {
   });
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [showBatch, setShowBatch] = useState(false);
+  const [existingDailyTotal, setExistingDailyTotal] = useState<number | undefined>(undefined);
   const [exportForm, setExportForm] = useState({
     dimension: 'month' as 'day' | 'week' | 'month' | 'year' | 'custom',
     format: 'excel' as 'excel' | 'csv' | 'markdown',
@@ -105,6 +114,24 @@ export default function TimeEntriesPage() {
     }
   };
 
+  const openBatchDialog = async () => {
+    // Query today's existing total for the current user
+    const today = new Date().toISOString().split('T')[0];
+    try {
+      const data = await apiFetch<{ data: TimeEntry[] }>(
+        `/api/time-entries?startDate=${today}&endDate=${today}&pageSize=100`
+      );
+      const total = (data.data || []).reduce(
+        (sum, e) => sum + parseFloat(e.hours),
+        0
+      );
+      setExistingDailyTotal(Math.round(total * 10) / 10);
+    } catch {
+      setExistingDailyTotal(undefined);
+    }
+    setShowBatch(true);
+  };
+
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
@@ -136,7 +163,7 @@ export default function TimeEntriesPage() {
         return;
       }
 
-      await apiFetch('/api/time-entries', {
+      const result = await apiFetch<TimeEntryMutationResult>('/api/time-entries', {
         method: 'POST',
         body: JSON.stringify({
           project_id: parseInt(form.project_id),
@@ -149,6 +176,11 @@ export default function TimeEntriesPage() {
         }),
       });
       toast.success('工时填报成功');
+      if (result.is_below_minimum) {
+        toast.warning(
+          `今日已填报 ${result.daily_total} 小时，不足 8 小时，请确认是否需要补填`
+        );
+      }
       setShowCreate(false);
       setForm({
         project_id: '',
@@ -170,7 +202,7 @@ export default function TimeEntriesPage() {
   const handleEdit = async () => {
     if (!editEntry) return;
     try {
-      await apiFetch(`/api/time-entries/${editEntry.id}`, {
+      const result = await apiFetch<TimeEntryMutationResult>(`/api/time-entries/${editEntry.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           hours: form.hours,
@@ -181,6 +213,11 @@ export default function TimeEntriesPage() {
         }),
       });
       toast.success('工时更新成功');
+      if (result.is_below_minimum) {
+        toast.warning(
+          `今日已填报 ${result.daily_total} 小时，不足 8 小时，请确认是否需要补填`
+        );
+      }
       setEditEntry(null);
       fetchEntries();
     } catch (err) {
@@ -383,6 +420,10 @@ export default function TimeEntriesPage() {
           <Button variant="outline" onClick={openExportDialog}>
             <Download className="w-4 h-4 mr-2" />
             导出日报
+          </Button>
+          <Button variant="outline" onClick={openBatchDialog}>
+            <Layers className="w-4 h-4 mr-2" />
+            批量填报
           </Button>
           <Button
             onClick={() => {
@@ -698,6 +739,15 @@ export default function TimeEntriesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Batch Entry Dialog */}
+      <BatchEntryDialog
+        open={showBatch}
+        onOpenChange={setShowBatch}
+        projects={projects}
+        onSubmitted={fetchEntries}
+        existingDailyTotal={existingDailyTotal}
+      />
     </div>
   );
 }

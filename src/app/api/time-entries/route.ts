@@ -154,7 +154,25 @@ export async function POST(request: NextRequest) {
       result = data;
     }
 
-    return NextResponse.json({ data: result }, { status: 201 });
+    // Query daily total after save for reminder
+    const { data: dailyAfter } = await client
+      .from('time_entries')
+      .select('hours')
+      .eq('user_id', currentUser.id)
+      .eq('work_date', work_date);
+    const dailyTotal = (dailyAfter || []).reduce(
+      (sum: number, e: { hours: string }) => sum + parseFloat(e.hours),
+      0
+    );
+
+    return NextResponse.json(
+      {
+        data: result,
+        daily_total: Math.round(dailyTotal * 10) / 10,
+        is_below_minimum: dailyTotal < 8,
+      },
+      { status: 201 }
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : '填报失败';
     return NextResponse.json({ error: message }, { status: 500 });

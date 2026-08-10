@@ -65,7 +65,23 @@ export async function PUT(
       .maybeSingle();
 
     if (error) throw new Error(`更新失败: ${error.message}`);
-    return NextResponse.json({ data });
+
+    // Query daily total after update for reminder
+    const { data: dailyAfter } = await client
+      .from('time_entries')
+      .select('hours')
+      .eq('user_id', existing.user_id)
+      .eq('work_date', existing.work_date);
+    const dailyTotal = (dailyAfter || []).reduce(
+      (sum: number, e: { hours: string }) => sum + parseFloat(e.hours),
+      0
+    );
+
+    return NextResponse.json({
+      data,
+      daily_total: Math.round(dailyTotal * 10) / 10,
+      is_below_minimum: dailyTotal < 8,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : '更新失败';
     return NextResponse.json({ error: message }, { status: 500 });
