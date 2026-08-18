@@ -17,6 +17,19 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogPortal,
+  AlertDialogOverlay,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -75,6 +88,7 @@ export default function ProjectsPage() {
     end_date: '',
     member_ids: [] as number[],
   });
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
 
   const fetchProjects = useCallback(async () => {
     setLoading(true);
@@ -147,14 +161,17 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('确定删除该项目？关联的工时记录也会被删除。')) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
     try {
       await apiFetch(`/api/projects/${id}`, { method: 'DELETE' });
       toast.success('删除成功');
       fetchProjects();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -325,7 +342,8 @@ export default function ProjectsPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDelete(p.id)}
+                              onClick={() => setDeleteTarget(p)}
+                              aria-label="删除项目"
                             >
                               <Trash2 className="w-4 h-4 text-red-500" />
                             </Button>
@@ -635,6 +653,24 @@ export default function ProjectsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete AlertDialog */}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除项目</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget?.name}及关联的工时记录将被删除，该操作不可撤销
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-700">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { apiFetch, apiDownload } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -16,15 +16,33 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { SimplePagination } from '@/components/simple-pagination';
-import { Plus, Edit, Trash2, Calendar, Loader2, Download, Layers } from 'lucide-react';
+import {
+  Plus,
+  Edit,
+  Trash2,
+  Loader2,
+  Download,
+  Layers,
+  ChevronLeft,
+  ChevronRight,
+  CalendarDays,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { BatchEntryDialog } from './batch-entry-dialog';
 
@@ -51,21 +69,51 @@ interface TimeEntryMutationResult {
   data: TimeEntry;
   daily_total: number;
   is_below_minimum: boolean;
+  merged?: boolean;
+}
+
+// 周一为一周起点的星期表头
+const WEEK_HEADERS = ['一', '二', '三', '四', '五', '六', '日'];
+
+// 将 Date 格式化为 YYYY-MM-DD（本地时区，避免 UTC 偏移导致日期错位）
+function formatLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// 取某月日历网格所需的所有日期格子（含前后补齐到完整周）
+function getMonthGridDates(year: number, month: number): Date[] {
+  // month 为 0-based
+  const first = new Date(year, month, 1);
+  // JS getDay(): 0=周日, 1=周一... 转换为周一为起点的偏移
+  const firstDayIdx = (first.getDay() + 6) % 7;
+  const start = new Date(year, month, 1 - firstDayIdx);
+  // 总是渲染 6 行（42 个格子），保证布局稳定
+  const dates: Date[] = [];
+  for (let i = 0; i < 42; i++) {
+    dates.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+  }
+  return dates;
 }
 
 export default function TimeEntriesPage() {
   const { user } = useAuth();
   const [entries, setEntries] = useState<TimeEntry[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [filterProject, setFilterProject] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  // currentMonth 形如 '2026-09'，默认当月
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  // 查看某日详情
+  const [dayDetail, setDayDetail] = useState<string | null>(null);
   const [form, setForm] = useState({
     project_id: '',
     work_date: new Date().toISOString().split('T')[0],
@@ -79,6 +127,7 @@ export default function TimeEntriesPage() {
   const [exporting, setExporting] = useState(false);
   const [showBatch, setShowBatch] = useState(false);
   const [existingDailyTotal, setExistingDailyTotal] = useState<number | undefined>(undefined);
+  const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
   const [exportForm, setExportForm] = useState({
     dimension: 'month' as 'day' | 'week' | 'month' | 'year' | 'custom',
     format: 'excel' as 'excel' | 'csv' | 'markdown',
@@ -88,22 +137,60 @@ export default function TimeEntriesPage() {
     projectId: 'all',
   });
 
+  // 按 currentMonth 计算起止日期
+  const [monthStart, monthEnd] = useMemo(() => {
+    const [yStr, mStr] = currentMonth.split('-');
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10) - 1;
+    const start = new Date(y, m, 1);
+    const end = new Date(y, m + 1, 0);
+    return [formatLocalDate(start), formatLocalDate(end)];
+  }, [currentMonth]);
+
+  // 月历网格日期
+  const gridDates = useMemo(() => {
+    const [yStr, mStr] = currentMonth.split('-');
+    return getMonthGridDates(parseInt(yStr, 10), parseInt(mStr, 10) - 1);
+  }, [currentMonth]);
+
+  // 按 work_date 分组的映射
+  const entriesByDate = useMemo(() => {
+    const map = new Map<string, TimeEntry[]>();
+    for (const e of entries) {
+      const list = map.get(e.work_date) || [];
+      list.push(e);
+      map.set(e.work_date, list);
+    }
+    return map;
+  }, [entries]);
+
+  // 月度合计
+  const monthTotalHours = useMemo(() => {
+    const sum = entries.reduce((s, e) => s + parseFloat(e.hours || '0'), 0);
+    return Math.round(sum * 10) / 10;
+  }, [entries]);
+
+  // 月度填报天数
+  const monthFilledDays = useMemo(() => entriesByDate.size, [entriesByDate]);
+
   const fetchEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: '20' });
+      const params = new URLSearchParams({
+        page: '1',
+        pageSize: '1000',
+        startDate: monthStart,
+        endDate: monthEnd,
+      });
       if (filterProject && filterProject !== 'all') params.set('projectId', filterProject);
-      if (startDate) params.set('startDate', startDate);
-      if (endDate) params.set('endDate', endDate);
       const data = await apiFetch<{ data: TimeEntry[]; total: number }>(`/api/time-entries?${params}`);
       setEntries(data.data || []);
-      setTotal(data.total || 0);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '查询失败');
     } finally {
       setLoading(false);
     }
-  }, [page, filterProject, startDate, endDate]);
+  }, [monthStart, monthEnd, filterProject]);
 
   const fetchProjects = async () => {
     try {
@@ -115,7 +202,6 @@ export default function TimeEntriesPage() {
   };
 
   const openBatchDialog = async () => {
-    // Query today's existing total for the current user
     const today = new Date().toISOString().split('T')[0];
     try {
       const data = await apiFetch<{ data: TimeEntry[] }>(
@@ -139,6 +225,24 @@ export default function TimeEntriesPage() {
   useEffect(() => {
     fetchProjects();
   }, []);
+
+  // 月份导航
+  const goPrevMonth = () => {
+    const [y, m] = currentMonth.split('-').map((n) => parseInt(n, 10));
+    const d = new Date(y, m - 1, 1);
+    d.setMonth(d.getMonth() - 1);
+    setCurrentMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+  const goNextMonth = () => {
+    const [y, m] = currentMonth.split('-').map((n) => parseInt(n, 10));
+    const d = new Date(y, m - 1, 1);
+    d.setMonth(d.getMonth() + 1);
+    setCurrentMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+  const goToday = () => {
+    const now = new Date();
+    setCurrentMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+  };
 
   const handleSubmit = async () => {
     if (!form.project_id || !form.work_date || !form.hours) {
@@ -175,7 +279,7 @@ export default function TimeEntriesPage() {
           tomorrow_plan: form.tomorrow_plan,
         }),
       });
-      toast.success('工时填报成功');
+      toast.success(result.merged ? '已合并到同日同项目记录' : '工时填报成功');
       if (result.is_below_minimum) {
         toast.warning(
           `今日已填报 ${result.daily_total} 小时，不足 8 小时，请确认是否需要补填`
@@ -225,14 +329,17 @@ export default function TimeEntriesPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('确定删除该工时记录？')) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
     try {
       await apiFetch(`/api/time-entries/${id}`, { method: 'DELETE' });
       toast.success('删除成功');
+      setDeleteTarget(null);
       fetchEntries();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
+      setDeleteTarget(null);
     }
   };
 
@@ -251,18 +358,14 @@ export default function TimeEntriesPage() {
 
   const handleResetFilters = () => {
     setFilterProject('');
-    setStartDate('');
-    setEndDate('');
-    setPage(1);
   };
 
   const openExportDialog = () => {
-    // Prefill export form with current filter values for convenience
     setExportForm((prev) => ({
       ...prev,
       date: new Date().toISOString().split('T')[0],
-      startDate: startDate || prev.startDate,
-      endDate: endDate || prev.endDate,
+      startDate: monthStart,
+      endDate: monthEnd,
       projectId: filterProject && filterProject !== 'all' ? filterProject : 'all',
     }));
     setShowExport(true);
@@ -300,7 +403,6 @@ export default function TimeEntriesPage() {
 
       const { blob, filename } = await apiDownload(`/api/time-entries/export?${params}`);
 
-      // Trigger browser download
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -319,7 +421,12 @@ export default function TimeEntriesPage() {
     }
   };
 
-  const totalPages = Math.ceil(total / 20);
+  // 计算某日工时合计
+  const getDayTotalHours = (dateStr: string): number => {
+    const list = entriesByDate.get(dateStr);
+    if (!list || list.length === 0) return 0;
+    return Math.round(list.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10) / 10;
+  };
 
   const entryForm = (isEdit: boolean) => (
     <div className="space-y-4">
@@ -409,12 +516,22 @@ export default function TimeEntriesPage() {
     </div>
   );
 
+  const todayStr = formatLocalDate(new Date());
+  const [currentY, currentM] = currentMonth.split('-').map((n) => parseInt(n, 10));
+  const monthLabel = `${currentY} 年 ${currentM} 月`;
+
+  // 日详情对话框内当天记录列表
+  const dayDetailEntries = dayDetail ? entriesByDate.get(dayDetail) || [] : [];
+  const dayDetailTotal = dayDetail
+    ? Math.round(dayDetailEntries.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10) / 10
+    : 0;
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-[#1e3a5f]">工时日报</h1>
-          <p className="text-sm text-[#475569] mt-1">填报和管理每日工时</p>
+          <p className="text-sm text-[#475569] mt-1">按日历查看和管理每日工时</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={openExportDialog}>
@@ -446,8 +563,8 @@ export default function TimeEntriesPage() {
         </div>
       </div>
 
-      {/* Filter */}
-      <div className="flex flex-wrap gap-3 mb-4">
+      {/* 项目筛选 */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
         <Select value={filterProject} onValueChange={setFilterProject}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder="全部项目" />
@@ -462,100 +579,145 @@ export default function TimeEntriesPage() {
           </SelectContent>
         </Select>
 
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-[#475569]" />
-          <Input
-            type="date"
-            value={startDate}
-            onChange={(e) => {
-              setStartDate(e.target.value);
-              setPage(1);
-            }}
-            placeholder="开始日期"
-            className="w-40"
-          />
-          <span className="text-[#475569]">至</span>
-          <Input
-            type="date"
-            value={endDate}
-            onChange={(e) => {
-              setEndDate(e.target.value);
-              setPage(1);
-            }}
-            placeholder="结束日期"
-            className="w-40"
-          />
-        </div>
-
-        {(filterProject || startDate || endDate) && (
+        {filterProject && filterProject !== 'all' && (
           <Button variant="outline" onClick={handleResetFilters}>
             重置筛选
           </Button>
         )}
+
+        <div className="ml-auto flex items-center gap-2 text-sm text-[#475569]">
+          <CalendarDays className="w-4 h-4" />
+          <span>
+            本月合计 <strong className="text-[#1e3a5f]">{monthTotalHours}h</strong>
+            <span className="mx-2 text-[#cbd5e1]">|</span>
+            填报 <strong className="text-[#1e3a5f]">{monthFilledDays}</strong> 天
+          </span>
+        </div>
       </div>
 
+      {/* 月份导航 */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" onClick={goPrevMonth} aria-label="上一月">
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+          <Button variant="outline" size="icon" onClick={goNextMonth} aria-label="下一月">
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+          <span className="text-base font-semibold text-[#1e3a5f] ml-1">{monthLabel}</span>
+        </div>
+        <Button variant="outline" size="sm" onClick={goToday}>
+          回到今天
+        </Button>
+      </div>
+
+      {/* 月历 */}
       <Card className="border-[#e2e8f0]">
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>项目</TableHead>
-                <TableHead>工作日期</TableHead>
-                <TableHead>工时</TableHead>
-                <TableHead>完成工作</TableHead>
-                <TableHead>填报人</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-[#475569]">
-                    加载中...
-                  </TableCell>
-                </TableRow>
-              ) : entries.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-[#475569]">
-                    暂无工时记录
-                  </TableCell>
-                </TableRow>
-              ) : (
-                entries.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-medium">{e.projects?.name || '-'}</TableCell>
-                    <TableCell>{e.work_date}</TableCell>
-                    <TableCell>{e.hours}h</TableCell>
-                    <TableCell className="max-w-xs truncate">{e.completed_work || '-'}</TableCell>
-                    <TableCell>{e.users?.real_name || '-'}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        {(e.users?.id === user?.id || user?.role === 'admin') && (
-                          <>
-                            <Button variant="ghost" size="sm" onClick={() => openEdit(e)}>
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => handleDelete(e.id)}>
-                              <Trash2 className="w-4 h-4 text-red-500" />
-                            </Button>
-                          </>
+        <CardContent className="p-3 sm:p-4">
+          {/* 星期表头 */}
+          <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2">
+            {WEEK_HEADERS.map((w) => (
+              <div
+                key={w}
+                className="text-center text-xs font-medium text-[#64748b] py-1"
+              >
+                {w}
+              </div>
+            ))}
+          </div>
+
+          {/* 日期格子 */}
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-[#475569]">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+              加载中...
+            </div>
+          ) : (
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+              {gridDates.map((d) => {
+                const dateStr = formatLocalDate(d);
+                const dayEntries = entriesByDate.get(dateStr) || [];
+                const dayTotal = getDayTotalHours(dateStr);
+                const isCurrentMonth = d.getMonth() === currentM - 1;
+                const isToday = dateStr === todayStr;
+                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+
+                return (
+                  <button
+                    key={dateStr}
+                    type="button"
+                    onClick={() => dayEntries.length > 0 && setDayDetail(dateStr)}
+                    className={[
+                      'relative min-h-[96px] sm:min-h-[112px] p-1.5 sm:p-2 rounded-md border text-left transition-colors',
+                      isCurrentMonth ? 'bg-white' : 'bg-[#f8fafc] text-[#94a3b8]',
+                      isToday ? 'border-[#1e3a5f] ring-1 ring-[#1e3a5f]' : 'border-[#e2e8f0]',
+                      dayEntries.length > 0 ? 'hover:border-[#1e3a5f]/50 hover:bg-[#f1f5f9] cursor-pointer' : 'cursor-default',
+                      isWeekend && isCurrentMonth ? 'bg-[#fafbfc]' : '',
+                    ].join(' ')}
+                  >
+                    {/* 日期号 */}
+                    <div className="flex items-center justify-between mb-1">
+                      <span
+                        className={[
+                          'text-xs font-medium',
+                          isToday ? 'text-[#1e3a5f] font-bold' : isCurrentMonth ? 'text-[#475569]' : 'text-[#cbd5e1]',
+                        ].join(' ')}
+                      >
+                        {d.getDate()}
+                      </span>
+                      {dayTotal > 0 && (
+                        <span
+                          className={[
+                            'text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 rounded',
+                            dayTotal >= 8
+                              ? 'bg-[#dcfce7] text-[#15803d]'
+                              : dayTotal >= 4
+                                ? 'bg-[#fef9c3] text-[#a16207]'
+                                : 'bg-[#fee2e2] text-[#b91c1c]',
+                          ].join(' ')}
+                        >
+                          {dayTotal}h
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 项目摘要 */}
+                    {dayEntries.length > 0 && (
+                      <div className="space-y-0.5">
+                        {dayEntries.slice(0, 3).map((e) => (
+                          <div
+                            key={e.id}
+                            className="text-[10px] sm:text-[11px] text-[#475569] truncate leading-tight"
+                            title={e.projects?.name}
+                          >
+                            <span className="text-[#1e3a5f]">{e.hours}h</span> {e.projects?.name}
+                          </div>
+                        ))}
+                        {dayEntries.length > 3 && (
+                          <div className="text-[10px] text-[#94a3b8]">
+                            +{dayEntries.length - 3} 项
+                          </div>
                         )}
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-          {totalPages > 1 && (
-            <div className="flex justify-center py-4">
-              <SimplePagination
-                currentPage={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-              />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
+
+          {/* 图例 */}
+          <div className="flex items-center justify-end gap-3 mt-3 text-[10px] sm:text-xs text-[#64748b]">
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded bg-[#dcfce7]" /> ≥8h 满工时
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded bg-[#fef9c3]" /> 4-7h
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded bg-[#fee2e2]" /> &lt;4h
+            </span>
+          </div>
         </CardContent>
       </Card>
 
@@ -597,6 +759,114 @@ export default function TimeEntriesPage() {
             </Button>
             <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleEdit}>
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Day Detail Dialog */}
+      <Dialog open={dayDetail !== null} onOpenChange={(open) => { if (!open) setDayDetail(null); }}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{dayDetail} 工时详情</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-[#475569]">当日合计</span>
+              <span
+                className={[
+                  'font-semibold px-2 py-0.5 rounded',
+                  dayDetailTotal >= 8
+                    ? 'bg-[#dcfce7] text-[#15803d]'
+                    : dayDetailTotal >= 4
+                      ? 'bg-[#fef9c3] text-[#a16207]'
+                      : 'bg-[#fee2e2] text-[#b91c1c]',
+                ].join(' ')}
+              >
+                {dayDetailTotal}h
+              </span>
+            </div>
+
+            {dayDetailEntries.length === 0 ? (
+              <p className="text-center py-6 text-[#475569]">当天暂无工时记录</p>
+            ) : (
+              <div className="space-y-3">
+                {dayDetailEntries.map((e) => (
+                  <div key={e.id} className="border border-[#e2e8f0] rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-[#1e3a5f]">{e.projects?.name || '-'}</span>
+                        <span className="text-xs text-[#94a3b8]">
+                          {e.users?.real_name || '-'}
+                        </span>
+                      </div>
+                      <span className="text-sm font-semibold text-[#1e3a5f]">{e.hours}h</span>
+                    </div>
+                    {e.completed_work && (
+                      <div className="text-xs text-[#475569]">
+                        <span className="text-[#64748b]">完成工作：</span>
+                        <span className="whitespace-pre-wrap">{e.completed_work}</span>
+                      </div>
+                    )}
+                    {e.tomorrow_plan && (
+                      <div className="text-xs text-[#475569]">
+                        <span className="text-[#64748b]">明日计划：</span>
+                        <span className="whitespace-pre-wrap">{e.tomorrow_plan}</span>
+                      </div>
+                    )}
+                    {e.coordination_matters && (
+                      <div className="text-xs text-[#475569]">
+                        <span className="text-[#64748b]">协调事宜：</span>
+                        <span className="whitespace-pre-wrap">{e.coordination_matters}</span>
+                      </div>
+                    )}
+                    {e.remarks && (
+                      <div className="text-xs text-[#475569]">
+                        <span className="text-[#64748b]">备注：</span>
+                        <span className="whitespace-pre-wrap">{e.remarks}</span>
+                      </div>
+                    )}
+                    {(e.users?.id === user?.id || user?.role === 'admin') && (
+                      <div className="flex items-center justify-end gap-1 pt-1 border-t border-[#e2e8f0]">
+                        <Button variant="ghost" size="sm" onClick={() => { setDayDetail(null); openEdit(e); }}>
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { setDayDetail(null); setDeleteTarget(e); }}
+                          aria-label="删除工时记录"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                if (dayDetail) {
+                  setForm({
+                    project_id: '',
+                    work_date: dayDetail,
+                    hours: '',
+                    remarks: '',
+                    completed_work: '',
+                    coordination_matters: '',
+                    tomorrow_plan: '',
+                  });
+                  setDayDetail(null);
+                  setShowCreate(true);
+                }
+              }}
+              className="bg-[#1e3a5f] hover:bg-[#16304f]"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              为该日补填
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -748,6 +1018,34 @@ export default function TimeEntriesPage() {
         onSubmitted={fetchEntries}
         existingDailyTotal={existingDailyTotal}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除工时记录「{deleteTarget?.projects?.name || '-'} · {deleteTarget?.work_date} · {deleteTarget?.hours}h」吗？
+              <br />
+              该操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600 text-white"
+              onClick={handleDelete}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

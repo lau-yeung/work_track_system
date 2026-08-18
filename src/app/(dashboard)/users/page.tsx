@@ -16,6 +16,17 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -72,6 +83,7 @@ export default function UsersPage() {
     newPassword: '',
     confirmPassword: '',
   });
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
 
   useEffect(() => {
     if (user && user.role !== 'admin') {
@@ -137,14 +149,17 @@ export default function UsersPage() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('确定删除该用户？')) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
     try {
       await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
       toast.success('删除成功');
+      setDeleteTarget(null);
       fetchUsers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败');
+      setDeleteTarget(null);
     }
   };
 
@@ -266,7 +281,8 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDelete(u.id)}
+                          onClick={() => setDeleteTarget(u)}
+                          aria-label="删除用户"
                         >
                           <Trash2 className="w-4 h-4 text-red-500" />
                         </Button>
@@ -470,6 +486,34 @@ export default function UsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除用户「{deleteTarget?.real_name || deleteTarget?.username || '-'}（{deleteTarget?.username || '-'} · ID: {deleteTarget?.id}）」吗？
+              <br />
+              该操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteTarget(null)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600 text-white"
+              onClick={handleDelete}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

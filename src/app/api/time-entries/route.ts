@@ -2,6 +2,30 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
 
+// 将 newItem 追加到 existing 之后，按 "1. xxx\n2. xxx" 编号列表格式合并。
+// 若 existing 为空则直接作为第 1 项；若 existing 不是编号列表，则把旧内容作为第 1 项。
+function appendNumberedItem(existing: string | null, newItem: string | null): string {
+  const trimmedNew = (newItem ?? '').trim();
+  if (!trimmedNew) return existing ?? '';
+  const trimmedExisting = (existing ?? '').trim();
+  if (!trimmedExisting) return `1. ${trimmedNew}`;
+  const idxMatches = [...trimmedExisting.matchAll(/(?:^|\n)\s*(\d+)\.\s/g)];
+  if (idxMatches.length > 0) {
+    const maxIdx = idxMatches.reduce((max, m) => Math.max(max, parseInt(m[1], 10)), 0);
+    return `${trimmedExisting.replace(/\n+$/, '')}\n${maxIdx + 1}. ${trimmedNew}`;
+  }
+  return `1. ${trimmedExisting}\n2. ${trimmedNew}`;
+}
+
+// 备注类字段：以换行简单追加，保留两段原文
+function appendRemarks(existing: string | null, newItem: string | null): string {
+  const trimmedNew = (newItem ?? '').trim();
+  if (!trimmedNew) return existing ?? '';
+  const trimmedExisting = (existing ?? '').trim();
+  if (!trimmedExisting) return trimmedNew;
+  return `${trimmedExisting}\n${trimmedNew}`;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const currentUser = await getSessionUser(request);
@@ -108,32 +132,35 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check if entry already exists for this user+project+date - upsert
+    // Check if entry already exists for this user+project+date - merge if so
     const { data: existing } = await client
       .from('time_entries')
-      .select('id')
+      .select('id, hours, remarks, completed_work, coordination_matters, tomorrow_plan')
       .eq('user_id', currentUser.id)
       .eq('project_id', project_id)
       .eq('work_date', work_date)
       .maybeSingle();
 
     let result;
+    let merged = false;
     if (existing) {
-      // Update existing entry
+      // 同一天同一项目已存在记录：工时累加，详情按编号列表合并（而非覆盖）
+      const mergedHours = parseFloat(existing.hours) + hoursNum;
       const { data, error } = await client
         .from('time_entries')
         .update({
-          hours: String(hoursNum),
-          remarks,
-          completed_work,
-          coordination_matters,
-          tomorrow_plan,
+          hours: String(mergedHours),
+          remarks: appendRemarks(existing.remarks, remarks),
+          completed_work: appendNumberedItem(existing.completed_work, completed_work),
+          coordination_matters: appendNumberedItem(existing.coordination_matters, coordination_matters),
+          tomorrow_plan: appendNumberedItem(existing.tomorrow_plan, tomorrow_plan),
         })
         .eq('id', existing.id)
         .select('*, projects(id, name), users(id, real_name, username)')
         .maybeSingle();
-      if (error) throw new Error(`更新工时失败: ${error.message}`);
+      if (error) throw new Error(`合并工时失败: ${error.message}`);
       result = data;
+      merged = true;
     } else {
       // Create new entry
       const { data, error } = await client
@@ -170,6 +197,7 @@ export async function POST(request: NextRequest) {
         data: result,
         daily_total: Math.round(dailyTotal * 10) / 10,
         is_below_minimum: dailyTotal < 8,
+        merged,
       },
       { status: 201 }
     );
