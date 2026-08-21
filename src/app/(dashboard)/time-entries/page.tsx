@@ -126,7 +126,6 @@ export default function TimeEntriesPage() {
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showBatch, setShowBatch] = useState(false);
-  const [existingDailyTotal, setExistingDailyTotal] = useState<number | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
   const [exportForm, setExportForm] = useState({
     dimension: 'month' as 'day' | 'week' | 'month' | 'year' | 'custom',
@@ -201,20 +200,7 @@ export default function TimeEntriesPage() {
     }
   };
 
-  const openBatchDialog = async () => {
-    const today = new Date().toISOString().split('T')[0];
-    try {
-      const data = await apiFetch<{ data: TimeEntry[] }>(
-        `/api/time-entries?startDate=${today}&endDate=${today}&pageSize=100`
-      );
-      const total = (data.data || []).reduce(
-        (sum, e) => sum + parseFloat(e.hours),
-        0
-      );
-      setExistingDailyTotal(Math.round(total * 10) / 10);
-    } catch {
-      setExistingDailyTotal(undefined);
-    }
+  const openBatchDialog = () => {
     setShowBatch(true);
   };
 
@@ -354,6 +340,20 @@ export default function TimeEntriesPage() {
       coordination_matters: entry.coordination_matters || '',
       tomorrow_plan: entry.tomorrow_plan || '',
     });
+  };
+
+  // 点击任意日期格子直接打开"填报工时"弹窗，预填该日期
+  const openCreateForDate = (dateStr: string) => {
+    setForm({
+      project_id: '',
+      work_date: dateStr,
+      hours: '',
+      remarks: '',
+      completed_work: '',
+      coordination_matters: '',
+      tomorrow_plan: '',
+    });
+    setShowCreate(true);
   };
 
   const handleResetFilters = () => {
@@ -646,12 +646,12 @@ export default function TimeEntriesPage() {
                   <button
                     key={dateStr}
                     type="button"
-                    onClick={() => dayEntries.length > 0 && setDayDetail(dateStr)}
+                    onClick={() => openCreateForDate(dateStr)}
+                    title={`点击填报 ${dateStr} 的工时`}
                     className={[
-                      'relative min-h-[96px] sm:min-h-[112px] p-1.5 sm:p-2 rounded-md border text-left transition-colors',
+                      'relative min-h-[96px] sm:min-h-[112px] p-1.5 sm:p-2 rounded-md border text-left transition-colors cursor-pointer hover:border-[#1e3a5f]/50 hover:bg-[#f1f5f9]',
                       isCurrentMonth ? 'bg-white' : 'bg-[#f8fafc] text-[#94a3b8]',
                       isToday ? 'border-[#1e3a5f] ring-1 ring-[#1e3a5f]' : 'border-[#e2e8f0]',
-                      dayEntries.length > 0 ? 'hover:border-[#1e3a5f]/50 hover:bg-[#f1f5f9] cursor-pointer' : 'cursor-default',
                       isWeekend && isCurrentMonth ? 'bg-[#fafbfc]' : '',
                     ].join(' ')}
                   >
@@ -667,8 +667,21 @@ export default function TimeEntriesPage() {
                       </span>
                       {dayTotal > 0 && (
                         <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDayDetail(dateStr);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.stopPropagation();
+                              setDayDetail(dateStr);
+                            }
+                          }}
+                          title="查看当日详情"
                           className={[
-                            'text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 rounded',
+                            'text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80',
                             dayTotal >= 8
                               ? 'bg-[#dcfce7] text-[#15803d]'
                               : dayTotal >= 4
@@ -1016,7 +1029,6 @@ export default function TimeEntriesPage() {
         onOpenChange={setShowBatch}
         projects={projects}
         onSubmitted={fetchEntries}
-        existingDailyTotal={existingDailyTotal}
       />
 
       {/* Delete Confirmation Dialog */}
