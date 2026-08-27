@@ -34,17 +34,15 @@ import {
 } from '@/components/ui/select';
 import {
   Plus,
-  Edit,
   Trash2,
   Loader2,
   Download,
-  Layers,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { BatchEntryDialog } from './batch-entry-dialog';
+import { TimeEntryDialog } from './time-entry-dialog';
 
 interface TimeEntry {
   id: number;
@@ -103,17 +101,19 @@ export default function TimeEntriesPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
+  // 统一的填报/追加弹窗：替代原 showCreate、dayDetail、showBatch 三个状态
+  const [entryDialog, setEntryDialog] = useState<{
+    open: boolean;
+    initialDate?: string;
+    existingEntries?: TimeEntry[];
+  }>({ open: false });
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [filterProject, setFilterProject] = useState('');
   // currentMonth 形如 '2026-09'，默认当月
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
-  // 查看某日详情
-  const [dayDetail, setDayDetail] = useState<string | null>(null);
   const [form, setForm] = useState({
     project_id: '',
     work_date: new Date().toISOString().split('T')[0],
@@ -125,7 +125,6 @@ export default function TimeEntriesPage() {
   });
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [showBatch, setShowBatch] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
   const [exportForm, setExportForm] = useState({
     dimension: 'month' as 'day' | 'week' | 'month' | 'year' | 'custom',
@@ -200,10 +199,6 @@ export default function TimeEntriesPage() {
     }
   };
 
-  const openBatchDialog = () => {
-    setShowBatch(true);
-  };
-
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
@@ -230,63 +225,15 @@ export default function TimeEntriesPage() {
     setCurrentMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
   };
 
-  const handleSubmit = async () => {
-    if (!form.project_id || !form.work_date || !form.hours) {
-      toast.error('项目、工作日期和工时为必填');
-      return;
-    }
-    if (!form.completed_work.trim()) {
-      toast.error('请填写今日完成工作');
-      return;
-    }
-    if (!form.tomorrow_plan.trim()) {
-      toast.error('请填写明日计划工作');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const hours = parseFloat(form.hours);
-      if (isNaN(hours) || hours <= 0 || hours > 24) {
-        toast.error('工时必须在 0-24 之间');
-        setSubmitting(false);
-        return;
-      }
-
-      const result = await apiFetch<TimeEntryMutationResult>('/api/time-entries', {
-        method: 'POST',
-        body: JSON.stringify({
-          project_id: parseInt(form.project_id),
-          work_date: form.work_date,
-          hours: String(hours),
-          remarks: form.remarks,
-          completed_work: form.completed_work,
-          coordination_matters: form.coordination_matters,
-          tomorrow_plan: form.tomorrow_plan,
-        }),
-      });
-      toast.success(result.merged ? '已合并到同日同项目记录' : '工时填报成功');
-      if (result.is_below_minimum) {
-        toast.warning(
-          `今日已填报 ${result.daily_total} 小时，不足 8 小时，请确认是否需要补填`
-        );
-      }
-      setShowCreate(false);
-      setForm({
-        project_id: '',
-        work_date: new Date().toISOString().split('T')[0],
-        hours: '',
-        remarks: '',
-        completed_work: '',
-        coordination_matters: '',
-        tomorrow_plan: '',
-      });
-      fetchEntries();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '填报失败');
-    } finally {
-      setSubmitting(false);
-    }
+  // 点击任意日期格子直接打开统一的"填报/追加工时"弹窗：
+  // 若当日已有数据则附带 existingEntries，弹窗顶部展示并支持追加；否则为空白新建模式
+  const openEntryDialogForDate = (dateStr: string) => {
+    const existing = entriesByDate.get(dateStr) || [];
+    setEntryDialog({
+      open: true,
+      initialDate: dateStr,
+      existingEntries: existing.length > 0 ? existing : undefined,
+    });
   };
 
   const handleEdit = async () => {
@@ -340,20 +287,6 @@ export default function TimeEntriesPage() {
       coordination_matters: entry.coordination_matters || '',
       tomorrow_plan: entry.tomorrow_plan || '',
     });
-  };
-
-  // 点击任意日期格子直接打开"填报工时"弹窗，预填该日期
-  const openCreateForDate = (dateStr: string) => {
-    setForm({
-      project_id: '',
-      work_date: dateStr,
-      hours: '',
-      remarks: '',
-      completed_work: '',
-      coordination_matters: '',
-      tomorrow_plan: '',
-    });
-    setShowCreate(true);
   };
 
   const handleResetFilters = () => {
@@ -428,42 +361,17 @@ export default function TimeEntriesPage() {
     return Math.round(list.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10) / 10;
   };
 
-  const entryForm = (isEdit: boolean) => (
+  // 单条编辑表单（由统一弹窗内"编辑"按钮触发，项目与日期只读）
+  const entryForm = () => (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>项目 *</Label>
-          {isEdit ? (
-            <Input value={entries.find((e) => e.id === editEntry?.id)?.projects?.name || ''} disabled />
-          ) : (
-            <Select
-              value={form.project_id}
-              onValueChange={(v) => setForm({ ...form, project_id: v })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="选择项目" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={String(p.id)}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <Input value={entries.find((e) => e.id === editEntry?.id)?.projects?.name || ''} disabled />
         </div>
         <div className="space-y-2">
           <Label>工作日期 *</Label>
-          {isEdit ? (
-            <Input value={form.work_date} disabled />
-          ) : (
-            <Input
-              type="date"
-              value={form.work_date}
-              onChange={(e) => setForm({ ...form, work_date: e.target.value })}
-            />
-          )}
+          <Input value={form.work_date} disabled />
         </div>
       </div>
       <div className="space-y-2">
@@ -520,12 +428,6 @@ export default function TimeEntriesPage() {
   const [currentY, currentM] = currentMonth.split('-').map((n) => parseInt(n, 10));
   const monthLabel = `${currentY} 年 ${currentM} 月`;
 
-  // 日详情对话框内当天记录列表
-  const dayDetailEntries = dayDetail ? entriesByDate.get(dayDetail) || [] : [];
-  const dayDetailTotal = dayDetail
-    ? Math.round(dayDetailEntries.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10) / 10
-    : 0;
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -538,23 +440,8 @@ export default function TimeEntriesPage() {
             <Download className="w-4 h-4 mr-2" />
             导出日报
           </Button>
-          <Button variant="outline" onClick={openBatchDialog}>
-            <Layers className="w-4 h-4 mr-2" />
-            批量填报
-          </Button>
           <Button
-            onClick={() => {
-              setForm({
-                project_id: '',
-                work_date: new Date().toISOString().split('T')[0],
-                hours: '',
-                remarks: '',
-                completed_work: '',
-                coordination_matters: '',
-                tomorrow_plan: '',
-              });
-              setShowCreate(true);
-            }}
+            onClick={() => setEntryDialog({ open: true })}
             className="bg-[#1e3a5f] hover:bg-[#16304f]"
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -646,8 +533,12 @@ export default function TimeEntriesPage() {
                   <button
                     key={dateStr}
                     type="button"
-                    onClick={() => openCreateForDate(dateStr)}
-                    title={`点击填报 ${dateStr} 的工时`}
+                    onClick={() => openEntryDialogForDate(dateStr)}
+                    title={
+                      dayTotal > 0
+                        ? `点击查看/追加 ${dateStr} 的工时`
+                        : `点击填报 ${dateStr} 的工时`
+                    }
                     className={[
                       'relative min-h-[96px] sm:min-h-[112px] p-1.5 sm:p-2 rounded-md border text-left transition-colors cursor-pointer hover:border-[#1e3a5f]/50 hover:bg-[#f1f5f9]',
                       isCurrentMonth ? 'bg-white' : 'bg-[#f8fafc] text-[#94a3b8]',
@@ -667,21 +558,9 @@ export default function TimeEntriesPage() {
                       </span>
                       {dayTotal > 0 && (
                         <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDayDetail(dateStr);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.stopPropagation();
-                              setDayDetail(dateStr);
-                            }
-                          }}
-                          title="查看当日详情"
+                          title="当日合计（点击格子查看/追加）"
                           className={[
-                            'text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 rounded cursor-pointer hover:opacity-80',
+                            'text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 rounded',
                             dayTotal >= 8
                               ? 'bg-[#dcfce7] text-[#15803d]'
                               : dayTotal >= 4
@@ -734,152 +613,19 @@ export default function TimeEntriesPage() {
         </CardContent>
       </Card>
 
-      {/* Create Dialog */}
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>填报工时</DialogTitle>
-          </DialogHeader>
-          {entryForm(false)}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreate(false)} disabled={submitting}>
-              取消
-            </Button>
-            <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  提交中...
-                </>
-              ) : (
-                '提交'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Dialog */}
+      {/* Edit Dialog (单条编辑，由统一弹窗内"编辑"按钮触发) */}
       <Dialog open={editEntry !== null} onOpenChange={() => setEditEntry(null)}>
         <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>编辑工时</DialogTitle>
           </DialogHeader>
-          {entryForm(true)}
+          {entryForm()}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditEntry(null)}>
               取消
             </Button>
             <Button className="bg-[#1e3a5f] hover:bg-[#16304f]" onClick={handleEdit}>
               保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Day Detail Dialog */}
-      <Dialog open={dayDetail !== null} onOpenChange={(open) => { if (!open) setDayDetail(null); }}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{dayDetail} 工时详情</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-[#475569]">当日合计</span>
-              <span
-                className={[
-                  'font-semibold px-2 py-0.5 rounded',
-                  dayDetailTotal >= 8
-                    ? 'bg-[#dcfce7] text-[#15803d]'
-                    : dayDetailTotal >= 4
-                      ? 'bg-[#fef9c3] text-[#a16207]'
-                      : 'bg-[#fee2e2] text-[#b91c1c]',
-                ].join(' ')}
-              >
-                {dayDetailTotal}h
-              </span>
-            </div>
-
-            {dayDetailEntries.length === 0 ? (
-              <p className="text-center py-6 text-[#475569]">当天暂无工时记录</p>
-            ) : (
-              <div className="space-y-3">
-                {dayDetailEntries.map((e) => (
-                  <div key={e.id} className="border border-[#e2e8f0] rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-[#1e3a5f]">{e.projects?.name || '-'}</span>
-                        <span className="text-xs text-[#94a3b8]">
-                          {e.users?.real_name || '-'}
-                        </span>
-                      </div>
-                      <span className="text-sm font-semibold text-[#1e3a5f]">{e.hours}h</span>
-                    </div>
-                    {e.completed_work && (
-                      <div className="text-xs text-[#475569]">
-                        <span className="text-[#64748b]">完成工作：</span>
-                        <span className="whitespace-pre-wrap">{e.completed_work}</span>
-                      </div>
-                    )}
-                    {e.tomorrow_plan && (
-                      <div className="text-xs text-[#475569]">
-                        <span className="text-[#64748b]">明日计划：</span>
-                        <span className="whitespace-pre-wrap">{e.tomorrow_plan}</span>
-                      </div>
-                    )}
-                    {e.coordination_matters && (
-                      <div className="text-xs text-[#475569]">
-                        <span className="text-[#64748b]">协调事宜：</span>
-                        <span className="whitespace-pre-wrap">{e.coordination_matters}</span>
-                      </div>
-                    )}
-                    {e.remarks && (
-                      <div className="text-xs text-[#475569]">
-                        <span className="text-[#64748b]">备注：</span>
-                        <span className="whitespace-pre-wrap">{e.remarks}</span>
-                      </div>
-                    )}
-                    {(e.users?.id === user?.id || user?.role === 'admin') && (
-                      <div className="flex items-center justify-end gap-1 pt-1 border-t border-[#e2e8f0]">
-                        <Button variant="ghost" size="sm" onClick={() => { setDayDetail(null); openEdit(e); }}>
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => { setDayDetail(null); setDeleteTarget(e); }}
-                          aria-label="删除工时记录"
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button
-              onClick={() => {
-                if (dayDetail) {
-                  setForm({
-                    project_id: '',
-                    work_date: dayDetail,
-                    hours: '',
-                    remarks: '',
-                    completed_work: '',
-                    coordination_matters: '',
-                    tomorrow_plan: '',
-                  });
-                  setDayDetail(null);
-                  setShowCreate(true);
-                }
-              }}
-              className="bg-[#1e3a5f] hover:bg-[#16304f]"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              为该日补填
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1023,12 +769,24 @@ export default function TimeEntriesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Batch Entry Dialog */}
-      <BatchEntryDialog
-        open={showBatch}
-        onOpenChange={setShowBatch}
+      {/* 统一填报/追加弹窗：合并原"批量填报"与"填报工时"，并支持点击已有数据的日期格子追加 */}
+      <TimeEntryDialog
+        open={entryDialog.open}
+        onOpenChange={(open) => setEntryDialog((prev) => ({ ...prev, open }))}
         projects={projects}
         onSubmitted={fetchEntries}
+        initialDate={entryDialog.initialDate}
+        existingEntries={entryDialog.existingEntries}
+        onEditEntry={(entry) => {
+          setEntryDialog((prev) => ({ ...prev, open: false }));
+          openEdit(entry);
+        }}
+        onDeleteEntry={(entry) => {
+          setEntryDialog((prev) => ({ ...prev, open: false }));
+          setDeleteTarget(entry);
+        }}
+        currentUserId={user?.id}
+        currentUserRole={user?.role}
       />
 
       {/* Delete Confirmation Dialog */}

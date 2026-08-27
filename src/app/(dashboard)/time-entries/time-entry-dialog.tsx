@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Plus, Trash2, Loader2, Copy } from 'lucide-react';
+import { Plus, Trash2, Loader2, Copy, Edit } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface ProjectOption {
@@ -29,8 +29,22 @@ interface ProjectOption {
   status: string;
 }
 
+// 仅使用展示所需字段，避免与页面态强耦合
+interface TimeEntryLite {
+  id: number;
+  project_id: number;
+  work_date: string;
+  hours: string;
+  remarks: string | null;
+  completed_work: string | null;
+  coordination_matters: string | null;
+  tomorrow_plan: string | null;
+  projects: { id: number; name: string };
+  users: { id: number; real_name: string; username: string };
+}
+
 // 每行独立承载一条工时记录的全部字段，支持不同日期
-interface BatchEntryRow {
+interface EntryRow {
   work_date: string;
   project_id: string;
   hours: string;
@@ -40,17 +54,33 @@ interface BatchEntryRow {
   remarks: string;
 }
 
-interface BatchEntryDialogProps {
+interface TimeEntryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projects: ProjectOption[];
   onSubmitted: () => void;
+  // 点击日历方格时传入，用于预填新行；为空时默认今天
+  initialDate?: string;
+  // 当日已有记录：传入后顶部展示并支持编辑/删除
+  existingEntries?: TimeEntryLite[];
+  // 点击"编辑"某条已有记录时的回调（页面打开单条编辑弹窗）
+  onEditEntry?: (entry: TimeEntryLite) => void;
+  // 点击"删除"某条已有记录时的回调（页面打开删除确认）
+  onDeleteEntry?: (entry: TimeEntryLite) => void;
+  // 用于判断是否显示编辑/删除按钮
+  currentUserId?: number;
+  currentUserRole?: string;
+}
+
+interface CurrentUser {
+  id: number;
+  role?: string;
 }
 
 const todayStr = () => new Date().toISOString().split('T')[0];
 
-const createEmptyRow = (): BatchEntryRow => ({
-  work_date: todayStr(),
+const createEmptyRow = (initialDate?: string): EntryRow => ({
+  work_date: initialDate || todayStr(),
   project_id: '',
   hours: '',
   completed_work: '',
@@ -66,17 +96,30 @@ interface SingleMutationResult {
   merged?: boolean;
 }
 
-export function BatchEntryDialog({
+export function TimeEntryDialog({
   open,
   onOpenChange,
   projects,
   onSubmitted,
-}: BatchEntryDialogProps) {
-  const [rows, setRows] = useState<BatchEntryRow[]>([createEmptyRow()]);
+  initialDate,
+  existingEntries,
+  onEditEntry,
+  onDeleteEntry,
+  currentUserId,
+  currentUserRole,
+}: TimeEntryDialogProps) {
+  const [rows, setRows] = useState<EntryRow[]>([createEmptyRow(initialDate)]);
   const [submitting, setSubmitting] = useState(false);
 
+  // 每次打开时根据 initialDate 重置新行
+  useEffect(() => {
+    if (open) {
+      setRows([createEmptyRow(initialDate)]);
+    }
+  }, [open, initialDate]);
+
   const resetForm = () => {
-    setRows([createEmptyRow()]);
+    setRows([createEmptyRow(initialDate)]);
   };
 
   const handleOpenChange = (value: boolean) => {
@@ -87,7 +130,12 @@ export function BatchEntryDialog({
   };
 
   const addRow = () => {
-    setRows([...rows, createEmptyRow()]);
+    // 新行继承上一行的日期，便于连续填报
+    const lastRow = rows[rows.length - 1];
+    setRows([
+      ...rows,
+      createEmptyRow(lastRow?.work_date || initialDate),
+    ]);
   };
 
   const removeRow = (index: number) => {
@@ -103,7 +151,7 @@ export function BatchEntryDialog({
     toast.success('已同步上一条明细，请按需修改');
   };
 
-  const updateRow = (index: number, field: keyof BatchEntryRow, value: string) => {
+  const updateRow = (index: number, field: keyof EntryRow, value: string) => {
     setRows(rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
   };
 
@@ -121,6 +169,26 @@ export function BatchEntryDialog({
       hoursByDate.set(row.work_date, (hoursByDate.get(row.work_date) || 0) + (isNaN(h) ? 0 : h));
     }
   }
+
+  // 已有记录合计（仅展示用）
+  const existingTotal = existingEntries
+    ? Math.round(
+        existingEntries.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10
+      ) / 10
+    : 0;
+
+  const hasExisting = !!existingEntries && existingEntries.length > 0;
+
+  const title = hasExisting
+    ? `编辑/追加工时（${initialDate || existingEntries?.[0]?.work_date || ''}）`
+    : initialDate
+      ? `填报工时（${initialDate}）`
+      : '填报工时';
+
+  const canModifyEntry = (entry: TimeEntryLite): boolean => {
+    if (currentUserRole === 'admin') return true;
+    return entry.users?.id === currentUserId;
+  };
 
   const handleSubmit = async () => {
     // 逐行校验
@@ -199,11 +267,9 @@ export function BatchEntryDialog({
       onSubmitted();
       onOpenChange(false);
     } catch (err) {
-      firstError = err instanceof Error ? err.message : '批量填报失败';
+      firstError = err instanceof Error ? err.message : '填报失败';
       if (successCount > 0) {
-        toast.error(
-          `部分失败：已成功 ${successCount} 条，剩余失败：${firstError}`
-        );
+        toast.error(`部分失败：已成功 ${successCount} 条，剩余失败：${firstError}`);
         onSubmitted();
         onOpenChange(false);
       } else {
@@ -218,9 +284,97 @@ export function BatchEntryDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>批量填报工时（多日期）</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <p className="text-xs text-[#64748b] -mt-2">
+
+        {hasExisting && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-[#475569]">当日已有合计</span>
+              <span
+                className={[
+                  'font-semibold px-2 py-0.5 rounded',
+                  existingTotal >= 8
+                    ? 'bg-[#dcfce7] text-[#15803d]'
+                    : existingTotal >= 4
+                      ? 'bg-[#fef9c3] text-[#a16207]'
+                      : 'bg-[#fee2e2] text-[#b91c1c]',
+                ].join(' ')}
+              >
+                {existingTotal}h
+              </span>
+            </div>
+
+            {existingEntries!.map((e) => (
+              <div
+                key={e.id}
+                className="border border-[#e2e8f0] rounded-lg p-3 space-y-2 bg-[#f8fafc]/60"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-[#1e3a5f]">
+                      {e.projects?.name || '-'}
+                    </span>
+                    <span className="text-xs text-[#94a3b8]">
+                      {e.users?.real_name || '-'}
+                    </span>
+                  </div>
+                  <span className="text-sm font-semibold text-[#1e3a5f]">{e.hours}h</span>
+                </div>
+                {e.completed_work && (
+                  <div className="text-xs text-[#475569]">
+                    <span className="text-[#64748b]">完成工作：</span>
+                    <span className="whitespace-pre-wrap">{e.completed_work}</span>
+                  </div>
+                )}
+                {e.tomorrow_plan && (
+                  <div className="text-xs text-[#475569]">
+                    <span className="text-[#64748b]">明日计划：</span>
+                    <span className="whitespace-pre-wrap">{e.tomorrow_plan}</span>
+                  </div>
+                )}
+                {e.coordination_matters && (
+                  <div className="text-xs text-[#475569]">
+                    <span className="text-[#64748b]">协调事宜：</span>
+                    <span className="whitespace-pre-wrap">{e.coordination_matters}</span>
+                  </div>
+                )}
+                {e.remarks && (
+                  <div className="text-xs text-[#475569]">
+                    <span className="text-[#64748b]">备注：</span>
+                    <span className="whitespace-pre-wrap">{e.remarks}</span>
+                  </div>
+                )}
+                {canModifyEntry(e) && (
+                  <div className="flex items-center justify-end gap-1 pt-1 border-t border-[#e2e8f0]">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onEditEntry?.(e)}
+                      title="编辑此条记录"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onDeleteEntry?.(e)}
+                      aria-label="删除工时记录"
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div className="border-t border-dashed border-[#e2e8f0] pt-2">
+              <p className="text-xs font-medium text-[#1e3a5f]">追加工时</p>
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-[#64748b]">
           每行可独立选择日期与项目，支持一次填报多个日期的工时。同日同项目记录会自动合并。
           {hoursByDate.size > 0 && (
             <span className="text-[#1e3a5f] font-medium">
@@ -357,7 +511,7 @@ export function BatchEntryDialog({
                 提交中...
               </>
             ) : (
-              `提交批量填报（${rows.length} 条）`
+              `提交填报（${rows.length} 条）`
             )}
           </Button>
         </DialogFooter>
@@ -365,3 +519,5 @@ export function BatchEntryDialog({
     </Dialog>
   );
 }
+
+export type { TimeEntryLite, ProjectOption, CurrentUser };
