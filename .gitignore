@@ -38,6 +38,9 @@ tsconfig.tsbuildinfo
 # 发布包输出目录
 dist-release/
 
+# 业务数据/旧项目副本（保留在开发分支作为备份，不进入 main）
+/projects/
+
 # 内部测试环境专用脚本（不发布）
 scripts/heartbeat.bat
 scripts/setup-heartbeat.bat
