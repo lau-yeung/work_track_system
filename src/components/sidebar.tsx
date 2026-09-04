@@ -12,17 +12,25 @@ import {
   Settings,
   LogOut,
   Sparkles,
+  Target,
+  CalendarCheck2,
+  TrendingUp,
+  Award,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
   { href: '/projects', label: '项目管理', icon: FolderKanban },
   { href: '/time-entries', label: '工时日报', icon: Clock },
+  { href: '/monthly-goals', label: '月度目标', icon: Target },
+  { href: '/weekly-reports', label: '周报汇总', icon: CalendarCheck2 },
   { href: '/work-summary', label: '工作总结', icon: Sparkles },
+  { href: '/my-performance', label: '我的绩效', icon: TrendingUp },
   { href: '/analytics', label: '数据分析', icon: BarChart3 },
 ];
 
 const adminItems = [
+  { href: '/performance', label: '绩效评分', icon: Award },
   { href: '/users', label: '用户管理', icon: Users },
   { href: '/settings', label: '系统配置', icon: Settings },
 ];

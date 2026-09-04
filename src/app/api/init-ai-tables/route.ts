@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSessionUser } from '@/lib/session';
-import { ensureAITables, ALTER_DIMENSION_CHECK_SQL } from '@/lib/ai-init';
+import { ensureAITables, NEW_FEATURES_DDL } from '@/lib/ai-init';
 
 const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS work_summaries (
   id SERIAL PRIMARY KEY,
@@ -21,31 +21,37 @@ CREATE INDEX IF NOT EXISTS idx_work_summaries_period ON work_summaries(period_st
 CREATE INDEX IF NOT EXISTS idx_work_summaries_dimension ON work_summaries(dimension);`;
 
 const MIGRATION_SQL = `-- 更新维度检查约束（支持新增维度）
-ALTER TABLE work_summaries 
+ALTER TABLE work_summaries
   DROP CONSTRAINT IF EXISTS work_summaries_dimension_check;
-  
-ALTER TABLE work_summaries 
-  ADD CONSTRAINT work_summaries_dimension_check 
+
+ALTER TABLE work_summaries
+  ADD CONSTRAINT work_summaries_dimension_check
   CHECK (dimension IN ('week', 'last_week', 'month', 'last_month', 'year', 'last_year', 'custom'));
 
 -- 添加 used_external_ai 字段（用于区分AI来源）
-ALTER TABLE work_summaries 
+ALTER TABLE work_summaries
   ADD COLUMN IF NOT EXISTS used_external_ai BOOLEAN DEFAULT FALSE;`;
+
+const NEW_TABLE_NAMES = ['report_templates', 'monthly_goals', 'weekly_reports', 'performance_scores'];
 
 /**
  * GET /api/init-ai-tables - Get SQL for manual table creation/migration
- * POST /api/init-ai-tables - Try auto-create table
  */
 export async function GET() {
   return NextResponse.json({
-    message: '工作总结表建表SQL',
+    message: '建表 SQL：work_summaries 为工作总结表；newFeaturesDdl 为模板配置/月度目标/周报汇总/绩效评分四表',
     sql: CREATE_TABLE_SQL,
     migrationSql: MIGRATION_SQL,
-    instructions: '如果是新建表，执行建表SQL；如果是升级已有表（支持新增维度），执行迁移SQL。',
-    alternative: '或设置DATABASE_URL环境变量后，通过POST /api/init-ai-tables 自动创建。',
+    newFeaturesDdl: NEW_FEATURES_DDL,
+    instructions:
+      '首次使用请在 Supabase SQL Editor 执行 newFeaturesDdl（含四表+默认模板+刷新缓存）；work_summaries 升级执行 migrationSql。',
+    alternative: '或配置 DATABASE_URL 环境变量后，POST /api/init-ai-tables 由管理员触发自动创建。',
   });
 }
 
+/**
+ * POST /api/init-ai-tables - Try auto-create tables (admin only)
+ */
 export async function POST(request: NextRequest) {
   try {
     const currentUser = await getSessionUser(request);
@@ -54,34 +60,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '仅管理员可执行此操作' }, { status: 403 });
     }
 
-    await ensureAITables();
+    // 强制尝试自动建表（忽略 initialized 短路）
+    const result = await ensureAITables(true);
 
-    // After auto-init, verify the table exists
+    // 验证所有表是否可通过 PostgREST 访问
     const { getSupabaseClient } = await import('@/storage/database/supabase-client');
     const client = getSupabaseClient();
-    const { error } = await client.from('work_summaries').select('id').limit(1);
-
-    if (error && error.code === '42P01') {
-      return NextResponse.json({
-        success: false,
-        message: '自动建表失败，请手动执行SQL',
-        sql: CREATE_TABLE_SQL,
-        instructions: '在Supabase控制台SQL Editor中执行上述建表语句',
-      });
+    const missing: string[] = [];
+    const allTables = ['work_summaries', ...NEW_TABLE_NAMES];
+    for (const t of allTables) {
+      const { error } = await client.from(t).select('id').limit(1);
+      if (error && (error.code === '42P01' || error.code === 'PGRST205' || /schema cache/i.test(error.message))) {
+        missing.push(t);
+      }
     }
 
-    if (error) {
-      return NextResponse.json({ error: `验证失败: ${error.message}` }, { status: 500 });
+    if (missing.length > 0) {
+      return NextResponse.json({
+        success: false,
+        autoInit: result,
+        missingTables: missing,
+        message: `自动建表未完全成功，以下表仍不可访问：${missing.join(', ')}。请在 Supabase SQL Editor 手动执行 newFeaturesDdl。`,
+        sql: CREATE_TABLE_SQL,
+        newFeaturesDdl: NEW_FEATURES_DDL,
+        instructions: '打开 Supabase 控制台 SQL Editor，粘贴 newFeaturesDdl 执行后刷新页面。',
+      });
     }
 
     return NextResponse.json({
       success: true,
-      message: '工作总结表已就绪',
-      migrationSql: MIGRATION_SQL,
-      migrationNotice: '如需支持新增维度（上周/上月/上年/自定义），请执行迁移SQL更新约束'
+      message: '所有数据表已就绪（work_summaries + 模板/月度目标/周报/绩效四表）',
+      autoInit: result,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : '初始化失败';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message, newFeaturesDdl: NEW_FEATURES_DDL }, { status: 500 });
   }
 }

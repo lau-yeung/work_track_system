@@ -63,6 +63,7 @@ bin/
 .vscode/
 .idea/
 *.iml
+.trae/
 
 # OS / misc
 Thumbs.db

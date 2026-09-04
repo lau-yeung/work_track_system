@@ -70,8 +70,8 @@ interface TimeEntryMutationResult {
   merged?: boolean;
 }
 
-// 周一为一周起点的星期表头
-const WEEK_HEADERS = ['一', '二', '三', '四', '五', '六', '日'];
+// 周日为一周起点的星期表头
+const WEEK_HEADERS = ['日', '一', '二', '三', '四', '五', '六'];
 
 // 将 Date 格式化为 YYYY-MM-DD（本地时区，避免 UTC 偏移导致日期错位）
 function formatLocalDate(d: Date): string {
@@ -81,12 +81,12 @@ function formatLocalDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-// 取某月日历网格所需的所有日期格子（含前后补齐到完整周）
+// 取某月日历网格所需的所有日期格子（含前后补齐到完整周，周日为起点）
 function getMonthGridDates(year: number, month: number): Date[] {
   // month 为 0-based
   const first = new Date(year, month, 1);
-  // JS getDay(): 0=周日, 1=周一... 转换为周一为起点的偏移
-  const firstDayIdx = (first.getDay() + 6) % 7;
+  // JS getDay(): 0=周日, 1=周一... 周日为起点时偏移即 getDay()
+  const firstDayIdx = first.getDay();
   const start = new Date(year, month, 1 - firstDayIdx);
   // 总是渲染 6 行（42 个格子），保证布局稳定
   const dates: Date[] = [];

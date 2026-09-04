@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
-import { generateWorkSummary } from '@/lib/ai-service';
+import { generateWorkSummary, generateTemplatedSummary, TimeEntryForAI } from '@/lib/ai-service';
 import { ensureAITables } from '@/lib/ai-init';
 
 interface TimeEntrySummary {
@@ -10,6 +10,7 @@ interface TimeEntrySummary {
   completed_work: string | null;
   tomorrow_plan: string | null;
   coordination_matters: string | null;
+  remarks: string | null;
   project_name: string;
   user_name: string;
 }
@@ -178,12 +179,13 @@ export async function POST(request: NextRequest) {
     if (!currentUser) return NextResponse.json({ error: '未登录' }, { status: 401 });
 
     const body = await request.json();
-    const { dimension, date, projectId, startDate, endDate } = body as {
+    const { dimension, date, projectId, startDate, endDate, templateId } = body as {
       dimension: Dimension;
       date?: string;
       projectId?: number;
       startDate?: string;
       endDate?: string;
+      templateId?: number;
     };
 
     const validDimensions: Dimension[] = ['week', 'last_week', 'month', 'last_month', 'year', 'last_year', 'custom'];
@@ -207,7 +209,7 @@ export async function POST(request: NextRequest) {
     let query = client
       .from('time_entries')
       .select(
-        'work_date, hours, completed_work, tomorrow_plan, coordination_matters, projects(id, name), users(id, real_name, username)'
+        'work_date, hours, completed_work, tomorrow_plan, coordination_matters, remarks, projects(id, name), users(id, real_name, username)'
       )
       .gte('work_date', start)
       .lte('work_date', end)
@@ -232,6 +234,7 @@ export async function POST(request: NextRequest) {
       completed_work: e.completed_work,
       tomorrow_plan: e.tomorrow_plan,
       coordination_matters: e.coordination_matters,
+      remarks: e.remarks,
       project_name: e.projects?.name || '-',
       user_name: e.users?.real_name || e.users?.username || '-',
     }));
@@ -273,18 +276,53 @@ export async function POST(request: NextRequest) {
       dimension === 'month' || dimension === 'last_month' ? 'month' :
       dimension === 'year' || dimension === 'last_year' ? 'year' : 'custom';
 
-    const summaryResult = await generateWorkSummary({
-      dimension: semanticDimension,
-      startDate: start,
-      endDate: end,
-      userId: targetUserId,
-      projectId,
-      entries: summaryEntries,
-      previousSummary,
-    });
+    let summaryContent: string;
+    let usedExternalAI: boolean;
 
-    const summaryContent = summaryResult.content;
-    const usedExternalAI = summaryResult.usedExternalAI;
+    if (templateId) {
+      // 按模板字段输出
+      const { data: tpl, error: tplErr } = await client
+        .from('report_templates')
+        .select('id, name, fields, user_id')
+        .eq('id', templateId)
+        .or(`user_id.eq.${currentUser.id},user_id.is.null`)
+        .maybeSingle();
+      if (tplErr || !tpl) {
+        return NextResponse.json({ error: '所选模板不存在或无权使用' }, { status: 400 });
+      }
+      const templateFields = Array.isArray(tpl.fields)
+        ? (tpl.fields as Array<{ key: string; label: string }>)
+        : [];
+      if (templateFields.length === 0) {
+        return NextResponse.json({ error: '模板字段为空' }, { status: 400 });
+      }
+      const aiEntries: TimeEntryForAI[] = summaryEntries.map((e) => ({
+        ...e,
+        remarks: e.remarks,
+      }));
+      const tplResult = await generateTemplatedSummary({
+        dimension: semanticDimension,
+        startDate: start,
+        endDate: end,
+        entries: aiEntries,
+        templateFields,
+        previousSummary,
+      });
+      summaryContent = tplResult.content;
+      usedExternalAI = tplResult.usedExternalAI;
+    } else {
+      const summaryResult = await generateWorkSummary({
+        dimension: semanticDimension,
+        startDate: start,
+        endDate: end,
+        userId: targetUserId,
+        projectId,
+        entries: summaryEntries,
+        previousSummary,
+      });
+      summaryContent = summaryResult.content;
+      usedExternalAI = summaryResult.usedExternalAI;
+    }
 
     // Save summary to database
     const summaryRecord = {

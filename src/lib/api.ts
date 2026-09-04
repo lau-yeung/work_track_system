@@ -20,8 +20,10 @@ export async function apiFetch<T = unknown>(
   options: ApiFetchOptions = {}
 ): Promise<T> {
   const token = getStoredToken();
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // FormData 时禁止手动设 Content-Type，由浏览器附 multipart boundary
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers as Record<string, string>),
   };
   if (token) {
@@ -40,11 +42,19 @@ export async function apiFetch<T = unknown>(
     throw new Error('登录已过期，请重新登录');
   }
 
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || '请求失败');
+  // 空响应（如 204 No Content）避免 res.json() 抛错
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = text; }
   }
-  return data as T;
+  if (!res.ok) {
+    const msg = data && typeof data === 'object' && 'error' in data
+      ? String((data as { error: unknown }).error)
+      : '请求失败';
+    throw new Error(msg);
+  }
+  return (data ?? {}) as T;
 }
 
 /**

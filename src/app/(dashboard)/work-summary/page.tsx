@@ -16,14 +16,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { 
-  Sparkles, 
-  Loader2, 
-  FileText, 
-  AlertCircle, 
-  Database, 
-  Copy, 
-  CheckCircle, 
+import { TemplateManager, ReportTemplate } from '@/components/template-manager';
+import {
+  Sparkles,
+  Loader2,
+  FileText,
+  AlertCircle,
+  Database,
+  Copy,
+  CheckCircle,
   Calendar,
   Settings,
   Bot,
@@ -154,6 +155,9 @@ export default function WorkSummaryPage() {
   const [customStartDate, setCustomStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [customEndDate, setCustomEndDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+  const [templates, setTemplates] = useState<ReportTemplate[]>([]);
+  // 注意：Radix Select.Item 不允许空字符串 value，用 'none' 表示“不使用模板”
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('none');
 
   const fetchSummaries = async () => {
     setLoading(true);
@@ -241,6 +245,22 @@ export default function WorkSummaryPage() {
     }
   };
 
+  const fetchTemplates = async () => {
+    try {
+      const data = await apiFetch<{ data: ReportTemplate[] }>('/api/report-templates');
+      const list = data.data || [];
+      setTemplates(list);
+      // 首次加载（仍为 'none'）时自动选中默认模板
+      setSelectedTemplateId((prev) => {
+        if (prev && prev !== 'none') return prev;
+        const def = list.find((t) => t.is_default);
+        return def ? String(def.id) : 'none';
+      });
+    } catch {
+      // 表可能未建，忽略
+    }
+  };
+
   useEffect(() => {
     fetchSummaries();
   }, [dimension, projectId]);
@@ -248,6 +268,7 @@ export default function WorkSummaryPage() {
   useEffect(() => {
     fetchProjects();
     fetchAIStatus();
+    fetchTemplates();
   }, []);
 
   const handleGenerate = async () => {
@@ -272,6 +293,7 @@ export default function WorkSummaryPage() {
         body.endDate = customEndDate;
       }
       if (projectId && projectId !== 'all') body.projectId = parseInt(projectId);
+      if (selectedTemplateId && selectedTemplateId !== 'none') body.templateId = parseInt(selectedTemplateId);
 
       const resp = await apiFetch<{ data: WorkSummary; saved?: boolean; used_external_ai?: boolean }>('/api/ai/work-summary', {
         method: 'POST',
@@ -533,6 +555,25 @@ export default function WorkSummaryPage() {
 
           {/* Project Filter */}
           <div className="flex items-center gap-2 ml-auto">
+            <Label className="text-sm">模板:</Label>
+            <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="不使用模板" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">不使用模板（自由总结）</SelectItem>
+                {templates.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.name}
+                    {t.is_default ? '（默认）' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <TemplateManager templates={templates} onChange={fetchTemplates} />
+          </div>
+
+          <div className="flex items-center gap-2">
             <Label className="text-sm">项目:</Label>
             <Select value={projectId} onValueChange={setProjectId}>
               <SelectTrigger className="w-48">
