@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
     const year = searchParams.get('year') ? parseInt(searchParams.get('year')!) : undefined;
     const month = searchParams.get('month') ? parseInt(searchParams.get('month')!) : undefined;
     const userId = searchParams.get('userId') ? parseInt(searchParams.get('userId')!) : undefined;
+    const keyword = searchParams.get('keyword')?.trim();
 
     const client = getSupabaseClient();
 
@@ -51,6 +52,9 @@ export async function GET(request: NextRequest) {
         q = q.eq('user_id', currentUser.id);
       } else if (userId) {
         q = q.eq('user_id', userId);
+      }
+      if (keyword) {
+        q = q.or(`goals.ilike.%${keyword}%,expected_output.ilike.%${keyword}%,task_breakdown.ilike.%${keyword}%`);
       }
       const res = await q;
       if (res.error) throw res.error;

@@ -43,25 +43,15 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { TimeEntryDialog } from './time-entry-dialog';
+import type {
+  TimeEntryLite,
+  ProductOption,
+  ProjectOption,
+  TaskOption,
+  VersionOption,
+} from './time-entry-dialog';
 
-interface TimeEntry {
-  id: number;
-  project_id: number;
-  work_date: string;
-  hours: string;
-  remarks: string | null;
-  completed_work: string | null;
-  coordination_matters: string | null;
-  tomorrow_plan: string | null;
-  projects: { id: number; name: string };
-  users: { id: number; real_name: string; username: string };
-}
-
-interface ProjectOption {
-  id: number;
-  name: string;
-  status: string;
-}
+type TimeEntry = TimeEntryLite;
 
 interface TimeEntryMutationResult {
   data: TimeEntry;
@@ -101,6 +91,9 @@ export default function TimeEntriesPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [tasks, setTasks] = useState<TaskOption[]>([]);
+  const [versions, setVersions] = useState<VersionOption[]>([]);
   // 统一的填报/追加弹窗：替代原 showCreate、dayDetail、showBatch 三个状态
   const [entryDialog, setEntryDialog] = useState<{
     open: boolean;
@@ -109,6 +102,9 @@ export default function TimeEntriesPage() {
   }>({ open: false });
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [filterProject, setFilterProject] = useState('');
+  // admin 可按成员筛选；普通用户仅看自己，无需此筛选项
+  const [filterUser, setFilterUser] = useState('all');
+  const [userOptions, setUserOptions] = useState<Array<{ id: number; real_name: string; username: string }>>([]);
   // currentMonth 形如 '2026-09'，默认当月
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -116,8 +112,11 @@ export default function TimeEntriesPage() {
   });
   const [form, setForm] = useState({
     project_id: '',
+    task_id: '',
+    version_id: '',
     work_date: new Date().toISOString().split('T')[0],
     hours: '',
+    progress: '',
     remarks: '',
     completed_work: '',
     coordination_matters: '',
@@ -181,6 +180,10 @@ export default function TimeEntriesPage() {
         endDate: monthEnd,
       });
       if (filterProject && filterProject !== 'all') params.set('projectId', filterProject);
+      // admin 可按 userId 过滤；普通用户 API 自动只看本人
+      if (user?.role === 'admin' && filterUser !== 'all') {
+        params.set('userId', filterUser);
+      }
       const data = await apiFetch<{ data: TimeEntry[]; total: number }>(`/api/time-entries?${params}`);
       setEntries(data.data || []);
     } catch (err) {
@@ -188,12 +191,54 @@ export default function TimeEntriesPage() {
     } finally {
       setLoading(false);
     }
-  }, [monthStart, monthEnd, filterProject]);
+  }, [monthStart, monthEnd, filterProject, filterUser, user?.role]);
 
   const fetchProjects = async () => {
     try {
       const data = await apiFetch<{ data: ProjectOption[] }>('/api/projects/my');
       if (data.data) setProjects(data.data);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchProducts = async () => {
+    try {
+      const data = await apiFetch<{ data: ProductOption[] }>('/api/products');
+      if (data.data) setProducts(data.data);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchTasks = async () => {
+    try {
+      // 填报下拉只需要进行中的任务
+      const data = await apiFetch<{ data: TaskOption[] }>('/api/tasks?status=active');
+      if (data.data) setTasks(data.data);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchVersions = async () => {
+    try {
+      // 填报下拉返回所有可见版本（包括已关闭的，便于历史填报）
+      const data = await apiFetch<{ data: VersionOption[] }>('/api/versions?all=1');
+      if (data.data) setVersions(data.data);
+    } catch {
+      // ignore
+    }
+  };
+
+  const fetchUserOptions = async () => {
+    // 仅管理员需要成员筛选
+    if (user?.role !== 'admin') return;
+    try {
+      const data = await apiFetch<{ data: Array<{ id: number; real_name: string; username: string }> }>(
+        '/api/users?pageSize=200'
+      );
+      setUserOptions((data.data || []).filter((u) => u.username !== 'admin'));
     } catch {
       // ignore
     }
@@ -205,6 +250,10 @@ export default function TimeEntriesPage() {
 
   useEffect(() => {
     fetchProjects();
+    fetchProducts();
+    fetchTasks();
+    fetchVersions();
+    fetchUserOptions();
   }, []);
 
   // 月份导航
@@ -243,6 +292,9 @@ export default function TimeEntriesPage() {
         method: 'PUT',
         body: JSON.stringify({
           hours: form.hours,
+          task_id: form.task_id ? parseInt(form.task_id) : editEntry.task_id,
+          version_id: form.version_id && form.version_id !== 'none' ? parseInt(form.version_id) : null,
+          progress: form.progress !== '' ? Number(form.progress) : 0,
           remarks: form.remarks,
           completed_work: form.completed_work,
           coordination_matters: form.coordination_matters,
@@ -257,6 +309,8 @@ export default function TimeEntriesPage() {
       }
       setEditEntry(null);
       fetchEntries();
+      // 编辑可能改变了任务进度，刷新任务列表
+      fetchTasks();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '更新失败');
     }
@@ -280,8 +334,11 @@ export default function TimeEntriesPage() {
     setEditEntry(entry);
     setForm({
       project_id: String(entry.project_id),
+      task_id: entry.task_id ? String(entry.task_id) : '',
+      version_id: entry.version_id ? String(entry.version_id) : '',
       work_date: entry.work_date,
       hours: entry.hours,
+      progress: entry.progress != null ? String(entry.progress) : '',
       remarks: entry.remarks || '',
       completed_work: entry.completed_work || '',
       coordination_matters: entry.coordination_matters || '',
@@ -291,6 +348,7 @@ export default function TimeEntriesPage() {
 
   const handleResetFilters = () => {
     setFilterProject('');
+    setFilterUser('all');
   };
 
   const openExportDialog = () => {
@@ -361,19 +419,100 @@ export default function TimeEntriesPage() {
     return Math.round(list.reduce((s, e) => s + parseFloat(e.hours || '0'), 0) * 10) / 10;
   };
 
-  // 单条编辑表单（由统一弹窗内"编辑"按钮触发，项目与日期只读）
-  const entryForm = () => (
+  // 单条编辑表单（由统一弹窗内"编辑"按钮触发，产品/项目与日期只读，任务/版本可在同项目内调整）
+  // 字段顺序与录入弹窗保持一致：工作日期 → 产品/项目 → 版本/任务 → 工时 → 今日完成工作 → 明日计划工作 → 需协调事宜 → 备注
+  const entryForm = () => {
+    const editing = entries.find((e) => e.id === editEntry?.id) || editEntry;
+    const productName = editing?.projects?.products?.name;
+    const projectName = editing?.projects?.name;
+    // 任务下拉：同项目下进行中的任务，并包含当前已选（可能已关闭）任务
+    const projectTasks = tasks.filter((t) => t.project_id === editing?.project_id);
+    const currentTaskId = editing?.task_id;
+    const currentTaskInList = projectTasks.some((t) => t.id === currentTaskId);
+    // 版本下拉：同项目下所有可见版本
+    const projectVersions = versions.filter((v) => v.project_id === editing?.project_id);
+    return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>项目 *</Label>
-          <Input value={entries.find((e) => e.id === editEntry?.id)?.projects?.name || ''} disabled />
-        </div>
         <div className="space-y-2">
           <Label>工作日期 *</Label>
           <Input value={form.work_date} disabled />
         </div>
+        <div className="space-y-2">
+          <Label>所属产品</Label>
+          <Input value={productName || '未分产品'} disabled />
+        </div>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>所属项目</Label>
+          <Input value={projectName || ''} disabled />
+        </div>
+        <div className="space-y-2">
+          <Label>所属版本</Label>
+          <Select
+            value={form.version_id || 'none'}
+            onValueChange={(v) => setForm({ ...form, version_id: v === 'none' ? '' : v })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="不选版本" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">不选版本</SelectItem>
+              {projectVersions.map((v) => (
+                <SelectItem key={v.id} value={String(v.id)}>
+                  {v.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label>所属任务 *</Label>
+          <Select
+            value={form.task_id}
+            onValueChange={(v) => {
+              // 切换任务时仅更新任务字段
+              setForm({ ...form, task_id: v });
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="选择任务" />
+            </SelectTrigger>
+            <SelectContent>
+              {editing?.project_tasks?.name && !currentTaskInList && (
+                <SelectItem value={String(editing.task_id)}>
+                  {editing.project_tasks.name}（当前）
+                </SelectItem>
+              )}
+              {projectTasks
+                .filter((t) => t.status === 'active')
+                .map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>任务进度(%)</Label>
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={form.progress}
+            onChange={(e) => setForm({ ...form, progress: e.target.value })}
+            placeholder="如 30，表示 30%"
+            disabled={!form.task_id}
+            title="手动录入任务进度（0-100 整数）"
+          />
+        </div>
+      </div>
+
       <div className="space-y-2">
         <Label>工时(h) *（步长0.5，单日总工时不超8h）</Label>
         <Input
@@ -396,21 +535,21 @@ export default function TimeEntriesPage() {
         />
       </div>
       <div className="space-y-2">
-        <Label>需协调事宜</Label>
-        <Textarea
-          value={form.coordination_matters}
-          onChange={(e) => setForm({ ...form, coordination_matters: e.target.value })}
-          placeholder="可选，需要协调的事项"
-          rows={2}
-        />
-      </div>
-      <div className="space-y-2">
         <Label>明日计划工作 *</Label>
         <Textarea
           value={form.tomorrow_plan}
           onChange={(e) => setForm({ ...form, tomorrow_plan: e.target.value })}
           placeholder="请描述明日计划工作"
           rows={3}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>需协调事宜</Label>
+        <Textarea
+          value={form.coordination_matters}
+          onChange={(e) => setForm({ ...form, coordination_matters: e.target.value })}
+          placeholder="可选，需要协调的事项"
+          rows={2}
         />
       </div>
       <div className="space-y-2">
@@ -422,11 +561,22 @@ export default function TimeEntriesPage() {
         />
       </div>
     </div>
-  );
+    );
+  };
 
   const todayStr = formatLocalDate(new Date());
   const [currentY, currentM] = currentMonth.split('-').map((n) => parseInt(n, 10));
   const monthLabel = `${currentY} 年 ${currentM} 月`;
+
+  // 年月快速选择：年选项（当前年前后各 3 年），月选项（1-12）
+  const now = new Date();
+  const yearOptions = (() => {
+    const baseYear = now.getFullYear();
+    const opts: number[] = [];
+    for (let y = baseYear - 3; y <= baseYear + 3; y++) opts.push(y);
+    return opts;
+  })();
+  const monthList = Array.from({ length: 12 }, (_, i) => i + 1);
 
   return (
     <div>
@@ -450,7 +600,7 @@ export default function TimeEntriesPage() {
         </div>
       </div>
 
-      {/* 项目筛选 */}
+      {/* 项目筛选 + 成员筛选（仅 admin） */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <Select value={filterProject} onValueChange={setFilterProject}>
           <SelectTrigger className="w-48">
@@ -466,11 +616,27 @@ export default function TimeEntriesPage() {
           </SelectContent>
         </Select>
 
-        {filterProject && filterProject !== 'all' && (
+        {user?.role === 'admin' && (
+          <Select value={filterUser} onValueChange={setFilterUser}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="全部成员" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部成员</SelectItem>
+              {userOptions.map((u) => (
+                <SelectItem key={u.id} value={String(u.id)}>
+                  {u.real_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {(filterProject && filterProject !== 'all') || (user?.role === 'admin' && filterUser !== 'all') ? (
           <Button variant="outline" onClick={handleResetFilters}>
             重置筛选
           </Button>
-        )}
+        ) : null}
 
         <div className="ml-auto flex items-center gap-2 text-sm text-[#475569]">
           <CalendarDays className="w-4 h-4" />
@@ -488,10 +654,46 @@ export default function TimeEntriesPage() {
           <Button variant="outline" size="icon" onClick={goPrevMonth} aria-label="上一月">
             <ChevronLeft className="w-4 h-4" />
           </Button>
+          {/* 年月独立选择 */}
+          <Select
+            value={String(currentY)}
+            onValueChange={(v) => {
+              const y = parseInt(v);
+              setCurrentMonth(`${y}-${String(currentM).padStart(2, '0')}`);
+            }}
+          >
+            <SelectTrigger className="w-[90px] ml-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {yearOptions.map((y) => (
+                <SelectItem key={y} value={String(y)}>
+                  {y} 年
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={String(currentM)}
+            onValueChange={(v) => {
+              const m = parseInt(v);
+              setCurrentMonth(`${currentY}-${String(m).padStart(2, '0')}`);
+            }}
+          >
+            <SelectTrigger className="w-[80px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {monthList.map((m) => (
+                <SelectItem key={m} value={String(m)}>
+                  {m} 月
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" size="icon" onClick={goNextMonth} aria-label="下一月">
             <ChevronRight className="w-4 h-4" />
           </Button>
-          <span className="text-base font-semibold text-[#1e3a5f] ml-1">{monthLabel}</span>
         </div>
         <Button variant="outline" size="sm" onClick={goToday}>
           回到今天
@@ -525,6 +727,7 @@ export default function TimeEntriesPage() {
                 const dateStr = formatLocalDate(d);
                 const dayEntries = entriesByDate.get(dateStr) || [];
                 const dayTotal = getDayTotalHours(dateStr);
+                const hasCoordination = dayEntries.some((e) => e.coordination_matters?.trim());
                 const isCurrentMonth = d.getMonth() === currentM - 1;
                 const isToday = dateStr === todayStr;
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
@@ -535,9 +738,11 @@ export default function TimeEntriesPage() {
                     type="button"
                     onClick={() => openEntryDialogForDate(dateStr)}
                     title={
-                      dayTotal > 0
-                        ? `点击查看/追加 ${dateStr} 的工时`
-                        : `点击填报 ${dateStr} 的工时`
+                      hasCoordination
+                        ? `${dateStr} 有需协调事宜，点击查看/追加工时`
+                        : dayTotal > 0
+                          ? `点击查看/追加 ${dateStr} 的工时`
+                          : `点击填报 ${dateStr} 的工时`
                     }
                     className={[
                       'relative min-h-[96px] sm:min-h-[112px] p-1.5 sm:p-2 rounded-md border text-left transition-colors cursor-pointer hover:border-[#1e3a5f]/50 hover:bg-[#f1f5f9]',
@@ -573,24 +778,59 @@ export default function TimeEntriesPage() {
                       )}
                     </div>
 
-                    {/* 项目摘要 */}
+                    {/* 任务摘要：产品/版本/任务/进度 拼接，悬浮提示完整路径 */}
                     {dayEntries.length > 0 && (
                       <div className="space-y-0.5">
-                        {dayEntries.slice(0, 3).map((e) => (
-                          <div
-                            key={e.id}
-                            className="text-[10px] sm:text-[11px] text-[#475569] truncate leading-tight"
-                            title={e.projects?.name}
-                          >
-                            <span className="text-[#1e3a5f]">{e.hours}h</span> {e.projects?.name}
-                          </div>
-                        ))}
+                        {dayEntries.slice(0, 3).map((e) => {
+                          // 小框展示 产品+版本+任务+进度
+                          const productName = e.projects?.products?.name || '';
+                          const versionName = e.project_versions?.name || '';
+                          const taskName = e.project_tasks?.name || '';
+                          const parts: string[] = [];
+                          if (productName) parts.push(productName);
+                          if (versionName) parts.push(versionName);
+                          if (taskName) parts.push(taskName);
+                          let label = parts.length > 0 ? parts.join('/') : '-';
+                          if (e.progress != null && e.progress > 0) {
+                            label += ` ${e.progress}%`;
+                          }
+                          const title = [
+                            productName,
+                            versionName,
+                            taskName,
+                            e.progress != null && e.progress > 0
+                              ? `进度 ${e.progress}%`
+                              : null,
+                            `${e.hours}h`,
+                          ]
+                            .filter(Boolean)
+                            .join(' / ');
+                          return (
+                            <div
+                              key={e.id}
+                              className="text-[10px] sm:text-[11px] text-[#475569] truncate leading-tight"
+                              title={title}
+                            >
+                              {label}
+                            </div>
+                          );
+                        })}
                         {dayEntries.length > 3 && (
                           <div className="text-[10px] text-[#94a3b8]">
                             +{dayEntries.length - 3} 项
                           </div>
                         )}
                       </div>
+                    )}
+
+                    {/* 协调事宜标签 */}
+                    {hasCoordination && (
+                      <span
+                        className="absolute bottom-1 left-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#fef3c7] text-[#b45309] border border-[#fde68a]"
+                        title="当日有需协调事宜"
+                      >
+                        协调
+                      </span>
                     )}
                   </button>
                 );
@@ -608,6 +848,10 @@ export default function TimeEntriesPage() {
             </span>
             <span className="flex items-center gap-1">
               <span className="inline-block w-3 h-3 rounded bg-[#fee2e2]" /> &lt;4h
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block px-1.5 rounded bg-[#fef3c7] text-[#b45309] border border-[#fde68a] text-[10px]">协调</span>
+              有协调事宜
             </span>
           </div>
         </CardContent>
@@ -773,8 +1017,14 @@ export default function TimeEntriesPage() {
       <TimeEntryDialog
         open={entryDialog.open}
         onOpenChange={(open) => setEntryDialog((prev) => ({ ...prev, open }))}
+        products={products}
         projects={projects}
-        onSubmitted={fetchEntries}
+        tasks={tasks}
+        versions={versions}
+        onSubmitted={() => {
+          fetchEntries();
+          fetchTasks();
+        }}
         initialDate={entryDialog.initialDate}
         existingEntries={entryDialog.existingEntries}
         onEditEntry={(entry) => {
@@ -800,7 +1050,7 @@ export default function TimeEntriesPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
-              确定删除工时记录「{deleteTarget?.projects?.name || '-'} · {deleteTarget?.work_date} · {deleteTarget?.hours}h」吗？
+            确定删除工时记录「{deleteTarget?.projects?.products?.name ? `${deleteTarget.projects.products.name} / ` : ''}{deleteTarget?.projects?.name || '-'}{deleteTarget?.project_versions?.name ? ` / ${deleteTarget.project_versions.name}` : ''} / {deleteTarget?.project_tasks?.name || '未分任务'} · {deleteTarget?.work_date} · {deleteTarget?.hours}h」吗？
               <br />
               该操作不可撤销。
             </AlertDialogDescription>

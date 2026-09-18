@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
+import { ensureProductTables } from '@/lib/product-init';
 
 export async function GET(
   request: NextRequest,
@@ -68,16 +69,30 @@ export async function PUT(
     const currentUser = await getSessionUser(request);
     if (!currentUser) return NextResponse.json({ error: '未登录' }, { status: 401 });
 
+    await ensureProductTables();
+
     const { id } = await params;
     const body = await request.json();
-    const updates: Record<string, string> = {};
+    const updates: Record<string, string | number | null> = {};
 
     if (body.name) updates.name = body.name;
     if (body.description !== undefined) updates.description = body.description;
     if (body.estimated_hours) updates.estimated_hours = String(body.estimated_hours);
     if (body.status && ['in_progress', 'completed', 'at_risk'].includes(body.status)) updates.status = body.status;
-    if (body.start_date) updates.start_date = body.start_date;
-    if (body.end_date) updates.end_date = body.end_date;
+    if (body.start_date !== undefined) updates.start_date = body.start_date || null;
+    if (body.end_date !== undefined) updates.end_date = body.end_date || null;
+    if (body.product_id) {
+      // 校验所属产品存在
+      const client0 = getSupabaseClient();
+      const { data: product, error: productError } = await client0
+        .from('products')
+        .select('id')
+        .eq('id', body.product_id)
+        .maybeSingle();
+      if (productError) throw new Error(`校验产品失败: ${productError.message}`);
+      if (!product) return NextResponse.json({ error: '所属产品不存在' }, { status: 400 });
+      updates.product_id = body.product_id;
+    }
 
     // Only admin or project owner/pm can update
     const client = getSupabaseClient();
@@ -92,7 +107,9 @@ export async function PUT(
       .from('projects')
       .update(updates)
       .eq('id', id)
-      .select('*, users!projects_owner_id_fkey(id, real_name, username)')
+      .select(
+        '*, users!projects_owner_id_fkey(id, real_name, username), products!projects_product_id_fkey(id, name)'
+      )
       .maybeSingle();
 
     if (error) throw new Error(`更新失败: ${error.message}`);

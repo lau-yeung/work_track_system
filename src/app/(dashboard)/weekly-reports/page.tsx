@@ -206,8 +206,8 @@ export default function WeeklyReportsPage() {
       await apiFetch('/api/month-work-config', {
         method: 'PUT',
         body: JSON.stringify({
-          year,
-          month,
+          period_year: year,
+          period_month: month,
           work_start: cfgStart,
           work_end: cfgEnd,
         }),

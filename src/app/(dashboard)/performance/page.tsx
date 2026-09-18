@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth-provider';
 import { apiFetch, apiDownload } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
@@ -28,7 +29,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Award, Sparkles, Loader2, Zap, Bot, Download } from 'lucide-react';
+import { Award, Sparkles, Loader2, Zap, Bot, Download, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface PerformanceScore {
@@ -85,6 +86,9 @@ export default function PerformancePage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [userId, setUserId] = useState<string>('all');
+  const [keyword, setKeyword] = useState('');
+  const [users, setUsers] = useState<Array<{ id: number; real_name: string; username: string }>>([]);
   const [scores, setScores] = useState<PerformanceScore[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -94,10 +98,23 @@ export default function PerformancePage() {
     return Array.from(new Set(ys)).sort((a, b) => b - a);
   }, []);
 
+  const fetchUsers = async () => {
+    try {
+      const data = await apiFetch<{ data: Array<{ id: number; real_name: string; username: string }> }>(
+        '/api/users?pageSize=200'
+      );
+      setUsers((data.data || []).filter((u) => u.username !== 'admin'));
+    } catch {
+      // ignore
+    }
+  };
+
   const fetchScores = async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ year: String(year), month: String(month) });
+      if (userId !== 'all') params.set('userId', userId);
+      if (keyword.trim()) params.set('keyword', keyword.trim());
       const data = await apiFetch<{ data: PerformanceScore[] }>(`/api/performance?${params}`);
       setScores(data.data || []);
     } catch (err) {
@@ -110,7 +127,12 @@ export default function PerformancePage() {
   useEffect(() => {
     fetchScores();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month]);
+  }, [year, month, userId, keyword]);
+
+  useEffect(() => {
+    fetchUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -210,6 +232,40 @@ export default function PerformancePage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center gap-2 ml-auto">
+              <Label className="text-sm">成员</Label>
+              <Select value={userId} onValueChange={setUserId}>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部成员</SelectItem>
+                  {users.map((u) => (
+                    <SelectItem key={u.id} value={String(u.id)}>
+                      {u.real_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94a3b8]" />
+              <Input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜索月度任务/评分说明"
+                className="pl-8 h-9"
+              />
+            </div>
+            {keyword && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 text-[#64748b]"
+                onClick={() => setKeyword('')}
+              >
+                <X className="w-3.5 h-3.5 mr-1" />
+                清除
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

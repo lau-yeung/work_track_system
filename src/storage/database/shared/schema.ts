@@ -28,6 +28,24 @@ export const users = pgTable(
   ]
 );
 
+// 产品表（禅道：产品，如 Starfish）
+export const products = pgTable(
+  "products",
+  {
+    id: serial().primaryKey(),
+    name: varchar("name", { length: 200 }).notNull().unique(),
+    code: varchar("code", { length: 50 }),
+    description: text("description"),
+    owner_id: integer("owner_id").references(() => users.id),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active, closed
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("products_status_idx").on(table.status),
+  ]
+);
+
 // 项目表
 export const projects = pgTable(
   "projects",
@@ -36,6 +54,7 @@ export const projects = pgTable(
     name: varchar("name", { length: 200 }).notNull(),
     description: text("description"),
     owner_id: integer("owner_id").notNull().references(() => users.id),
+    product_id: integer("product_id").references(() => products.id),
     estimated_hours: numeric("estimated_hours", { precision: 10, scale: 1 }).notNull(),
     status: varchar("status", { length: 20 }).notNull().default("in_progress"), // in_progress, completed, at_risk
     start_date: date("start_date"),
@@ -46,6 +65,52 @@ export const projects = pgTable(
   (table) => [
     index("projects_owner_id_idx").on(table.owner_id),
     index("projects_status_idx").on(table.status),
+    index("projects_product_id_idx").on(table.product_id),
+  ]
+);
+
+// 任务表（禅道：任务，隶属于项目，如 Starfish-4.1.0-功能测试）
+export const projectTasks = pgTable(
+  "project_tasks",
+  {
+    id: serial().primaryKey(),
+    project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active, closed
+    // 任务进度缓存：按"已完成执行数/总执行数*100"实时重算后写入；0-100
+    progress: integer("progress").notNull().default(0),
+    created_by: integer("created_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("project_tasks_project_id_idx").on(table.project_id),
+    index("project_tasks_status_idx").on(table.status),
+  ]
+);
+
+// 任务执行表（任务→执行两层）
+// 一个任务下挂多个"执行"，日报录入选任务后自动拉取执行列表供勾选，
+// 勾选完成后系统按"已完成执行数/总执行数*100%"自动算任务进度（无需用户录入）。
+export const taskExecutions = pgTable(
+  "task_executions",
+  {
+    id: serial().primaryKey(),
+    task_id: integer("task_id").notNull().references(() => projectTasks.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active, done
+    sort_order: integer("sort_order").notNull().default(0),
+    completed_at: date("completed_at"),
+    completed_by: integer("completed_by").references(() => users.id),
+    created_by: integer("created_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("task_executions_task_idx").on(table.task_id),
+    index("task_executions_status_idx").on(table.status),
   ]
 );
 
@@ -71,6 +136,7 @@ export const timeEntries = pgTable(
     id: serial().primaryKey(),
     user_id: integer("user_id").notNull().references(() => users.id),
     project_id: integer("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    task_id: integer("task_id").references(() => projectTasks.id, { onDelete: "set null" }),
     work_date: date("work_date").notNull(),
     hours: numeric("hours", { precision: 4, scale: 1 }).notNull(),
     remarks: text("remarks"),
@@ -83,6 +149,7 @@ export const timeEntries = pgTable(
   (table) => [
     index("te_user_id_idx").on(table.user_id),
     index("te_project_id_idx").on(table.project_id),
+    index("te_task_id_idx").on(table.task_id),
     index("te_work_date_idx").on(table.work_date),
     index("te_user_project_date_idx").on(table.user_id, table.project_id, table.work_date),
   ]

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
+import { ensureProductTables } from '@/lib/product-init';
 
 interface BatchEntryInput {
   project_id: number;
+  task_id?: number;
   hours: string;
   completed_work: string;
   remarks?: string;
+  progress?: number;
 }
 
 interface BatchRequestBody {
@@ -16,10 +19,16 @@ interface BatchRequestBody {
   entries: BatchEntryInput[];
 }
 
+const ENTRY_SELECT =
+  '*, projects(id, name, product_id, products!projects_product_id_fkey(id, name)), ' +
+  'project_tasks!time_entries_task_id_fkey(id, name, status), users(id, real_name, username)';
+
 export async function POST(request: NextRequest) {
   try {
     const currentUser = await getSessionUser(request);
     if (!currentUser) return NextResponse.json({ error: '未登录' }, { status: 401 });
+
+    await ensureProductTables();
 
     const body = (await request.json()) as BatchRequestBody;
     const { work_date, coordination_matters, tomorrow_plan, entries } = body;
@@ -40,9 +49,11 @@ export async function POST(request: NextRequest) {
     // Validate each entry and parse hours
     const parsedEntries: Array<{
       project_id: number;
+      task_id: number | null;
       hoursNum: number;
       completed_work: string;
       remarks: string;
+      progress: number | undefined;
     }> = [];
 
     for (let i = 0; i < entries.length; i++) {
@@ -50,6 +61,12 @@ export async function POST(request: NextRequest) {
       if (!entry.project_id || !entry.hours || !entry.completed_work?.trim()) {
         return NextResponse.json(
           { error: `第${i + 1}行：项目、工时和完成工作为必填` },
+          { status: 400 }
+        );
+      }
+      if (!entry.task_id) {
+        return NextResponse.json(
+          { error: `第${i + 1}行：请选择所属任务（产品-项目-任务）` },
           { status: 400 }
         );
       }
@@ -71,23 +88,60 @@ export async function POST(request: NextRequest) {
 
       parsedEntries.push({
         project_id: entry.project_id,
+        task_id: entry.task_id ?? null,
         hoursNum,
         completed_work: entry.completed_work.trim(),
         remarks: entry.remarks || '',
+        progress:
+          entry.progress != null
+            ? Math.max(0, Math.min(100, entry.progress))
+            : undefined,
       });
     }
 
-    // Check duplicate projects within batch
-    const projectIds = parsedEntries.map((e) => e.project_id);
-    const uniqueProjectIds = new Set(projectIds);
-    if (uniqueProjectIds.size !== projectIds.length) {
+    // 校验任务：存在、归属对应项目、未关闭
+    const taskIds = parsedEntries.map((e) => e.task_id).filter((t): t is number => t != null);
+    const { data: tasksData } = await client
+      .from('project_tasks')
+      .select('id, project_id, status')
+      .in('id', taskIds);
+    const taskMap = new Map<number, { project_id: number; status: string }>(
+      (tasksData || []).map((t: { id: number; project_id: number; status: string }) => [
+        t.id,
+        { project_id: t.project_id, status: t.status },
+      ])
+    );
+    for (const e of parsedEntries) {
+      if (e.task_id == null) {
+        return NextResponse.json({ error: '存在未选择任务的工时记录' }, { status: 400 });
+      }
+      const t = taskMap.get(e.task_id);
+      if (!t) {
+        return NextResponse.json({ error: '所选任务不存在' }, { status: 400 });
+      }
+      if (Number(t.project_id) !== Number(e.project_id)) {
+        return NextResponse.json(
+          { error: '所选任务与项目不匹配，请重新选择产品-项目-任务' },
+          { status: 400 }
+        );
+      }
+      if (t.status === 'closed') {
+        return NextResponse.json({ error: '存在已关闭的任务，请重新选择' }, { status: 400 });
+      }
+    }
+
+    // Check duplicate tasks within batch （三级结构后按任务去重：同项目不同任务可分别填报）
+    const taskKeyList = parsedEntries.map((e) => `${e.project_id}:${e.task_id}`);
+    const uniqueTaskKeys = new Set(taskKeyList);
+    if (uniqueTaskKeys.size !== taskKeyList.length) {
       return NextResponse.json(
-        { error: '批量填报中存在重复项目，每个项目只能填报一次' },
+        { error: '批量填报中存在重复任务，每个任务只能填报一次' },
         { status: 400 }
       );
     }
 
     // Check project membership for non-admin users
+    const projectIds = parsedEntries.map((e) => e.project_id);
     if (currentUser.role !== 'admin') {
       const { data: memberships } = await client
         .from('project_members')
@@ -108,22 +162,24 @@ export async function POST(request: NextRequest) {
     // Query existing entries for this user+date (for daily total and upsert detection)
     const { data: existingDailyEntries } = await client
       .from('time_entries')
-      .select('id, project_id, hours')
+      .select('id, project_id, task_id, hours')
       .eq('user_id', currentUser.id)
       .eq('work_date', work_date);
 
-    const existingMap = new Map<number, { id: number; hours: number }>();
+    // 三级结构后按 项目+任务 归并（同日同项目不同任务为不同记录）
+    const entryKey = (projectId: number, taskId: number | null) => `${projectId}:${taskId ?? '-'}`;
+    const existingMap = new Map<string, { id: number; hours: number }>();
     let existingDailyTotal = 0;
     for (const e of existingDailyEntries || []) {
       const h = parseFloat(e.hours);
       existingDailyTotal += h;
-      existingMap.set(e.project_id, { id: e.id, hours: h });
+      existingMap.set(entryKey(e.project_id, e.task_id), { id: e.id, hours: h });
     }
 
     // Calculate batch total (for new entries, add full; for upsert, add delta)
     let batchDelta = 0;
     for (const entry of parsedEntries) {
-      const existing = existingMap.get(entry.project_id);
+      const existing = existingMap.get(entryKey(entry.project_id, entry.task_id));
       if (existing) {
         // Upsert: replace old hours with new
         batchDelta += entry.hoursNum - existing.hours;
@@ -193,7 +249,7 @@ export async function POST(request: NextRequest) {
     const savedEntries: Array<Record<string, unknown>> = [];
 
     for (const entry of parsedEntries) {
-      const existing = existingMap.get(entry.project_id);
+      const existing = existingMap.get(entryKey(entry.project_id, entry.task_id));
 
       let result: Record<string, unknown> | null;
       if (existing) {
@@ -202,16 +258,18 @@ export async function POST(request: NextRequest) {
           .from('time_entries')
           .update({
             hours: String(entry.hoursNum),
+            task_id: entry.task_id,
             remarks: entry.remarks,
             completed_work: entry.completed_work,
             coordination_matters,
             tomorrow_plan,
+            progress: entry.progress != null ? Math.max(0, Math.min(100, entry.progress)) : undefined,
           })
           .eq('id', existing.id)
-          .select('*, projects(id, name), users(id, real_name, username)')
+          .select(ENTRY_SELECT)
           .maybeSingle();
         if (error) throw new Error(`更新工时失败: ${error.message}`);
-        result = data;
+        result = data as Record<string, unknown> | null;
       } else {
         // Create new entry
         const { data, error } = await client
@@ -219,17 +277,19 @@ export async function POST(request: NextRequest) {
           .insert({
             user_id: currentUser.id,
             project_id: entry.project_id,
+            task_id: entry.task_id,
             work_date,
             hours: String(entry.hoursNum),
             remarks: entry.remarks,
             completed_work: entry.completed_work,
             coordination_matters,
             tomorrow_plan,
+            progress: entry.progress != null ? Math.max(0, Math.min(100, entry.progress)) : 0,
           })
-          .select('*, projects(id, name), users(id, real_name, username)')
+          .select(ENTRY_SELECT)
           .maybeSingle();
         if (error) throw new Error(`创建工时失败: ${error.message}`);
-        result = data;
+        result = data as Record<string, unknown> | null;
       }
 
       if (result) savedEntries.push(result);

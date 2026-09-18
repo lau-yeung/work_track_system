@@ -1,0 +1,2 @@
+5082fe90bc1a97589110aac69f1e80b4717ed38b1fb39df08ddb8e87fb79b639  worktrack-v1.0.0.tar.gz
+96d5bb60fef06270d174a60ca24d999a5f7e4ada475ab33d0dec0822ceae81e2  worktrack-v1.0.0.zip

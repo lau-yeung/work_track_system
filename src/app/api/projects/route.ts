@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
+import { ensureProductTables } from '@/lib/product-init';
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,6 +13,9 @@ export async function GET(request: NextRequest) {
     const page = parseInt(searchParams.get('page') || '1');
     const pageSize = parseInt(searchParams.get('pageSize') || '20');
     const status = searchParams.get('status');
+    const keyword = searchParams.get('keyword')?.trim();
+    const productId = searchParams.get('productId');
+    const ownerId = searchParams.get('ownerId');
 
     // Get user's project IDs first (for non-admin)
     let projectIds: number[] | null = null;
@@ -33,13 +37,23 @@ export async function GET(request: NextRequest) {
       projectIds = allIds;
     }
 
+    await ensureProductTables();
+
     let query = client
       .from('projects')
-      .select('*, users!projects_owner_id_fkey(id, real_name, username)', { count: 'exact' })
+      .select(
+        '*, users!projects_owner_id_fkey(id, real_name, username), products!projects_product_id_fkey(id, name)',
+        { count: 'exact' }
+      )
       .order('created_at', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1);
 
     if (status) query = query.eq('status', status);
+    if (productId) query = query.eq('product_id', parseInt(productId, 10));
+    if (ownerId) query = query.eq('owner_id', parseInt(ownerId, 10));
+    if (keyword) {
+      query = query.or(`name.ilike.%${keyword}%,description.ilike.%${keyword}%`);
+    }
     if (projectIds && projectIds.length > 0) {
       query = query.in('id', projectIds);
     } else if (projectIds && projectIds.length === 0) {
@@ -83,14 +97,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '仅PM或管理员可创建项目' }, { status: 403 });
     }
 
+    await ensureProductTables();
+
     const body = await request.json();
-    const { name, description, owner_id, estimated_hours, start_date, end_date, member_ids } = body;
+    const { name, description, owner_id, product_id, estimated_hours, start_date, end_date, member_ids } = body;
 
     if (!name || !owner_id || !estimated_hours) {
       return NextResponse.json({ error: '项目名称、负责人和预估工时为必填' }, { status: 400 });
     }
+    if (!product_id) {
+      return NextResponse.json({ error: '请选择所属产品' }, { status: 400 });
+    }
 
     const client = getSupabaseClient();
+
+    // 校验所属产品存在
+    const { data: product, error: productError } = await client
+      .from('products')
+      .select('id, name, status')
+      .eq('id', product_id)
+      .maybeSingle();
+    if (productError) throw new Error(`校验产品失败: ${productError.message}`);
+    if (!product) return NextResponse.json({ error: '所属产品不存在' }, { status: 400 });
 
     // The system "admin" account is reserved for special data handling
     // and shall not be assigned as project owner or member.
@@ -122,11 +150,14 @@ export async function POST(request: NextRequest) {
         name,
         description,
         owner_id,
+        product_id,
         estimated_hours: String(estimated_hours),
         start_date: start_date || null,
         end_date: end_date || null,
       })
-      .select('*, users!projects_owner_id_fkey(id, real_name, username)')
+      .select(
+        '*, users!projects_owner_id_fkey(id, real_name, username), products!projects_product_id_fkey(id, name)'
+      )
       .single();
 
     if (error) throw new Error(`创建项目失败: ${error.message}`);

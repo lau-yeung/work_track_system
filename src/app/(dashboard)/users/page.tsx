@@ -35,7 +35,7 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SimplePagination } from '@/components/simple-pagination';
-import { Plus, Edit, Trash2, KeyRound } from 'lucide-react';
+import { Plus, Edit, Trash2, KeyRound, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 
@@ -84,6 +84,10 @@ export default function UsersPage() {
     confirmPassword: '',
   });
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  // 筛选条件：keyword（用户名/真实姓名/邮箱）、role、status
+  const [filterKeyword, setFilterKeyword] = useState('');
+  const [filterRole, setFilterRole] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
 
   useEffect(() => {
     if (user && user.role !== 'admin') {
@@ -94,7 +98,11 @@ export default function UsersPage() {
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch<{ data: UserRow[]; total: number }>(`/api/users?page=${page}&pageSize=20`);
+      const params = new URLSearchParams({ page: String(page), pageSize: '20' });
+      if (filterKeyword.trim()) params.set('keyword', filterKeyword.trim());
+      if (filterRole && filterRole !== 'all') params.set('role', filterRole);
+      if (filterStatus && filterStatus !== 'all') params.set('status', filterStatus);
+      const data = await apiFetch<{ data: UserRow[]; total: number }>(`/api/users?${params}`);
       setUsers(data.data || []);
       setTotal(data.total || 0);
     } catch (err) {
@@ -102,7 +110,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, filterKeyword, filterRole, filterStatus]);
 
   useEffect(() => {
     if (user?.role === 'admin') fetchUsers();
@@ -216,6 +224,71 @@ export default function UsersPage() {
 
       <Card className="border-[#e2e8f0]">
         <CardContent className="p-0">
+          {/* 筛选栏 */}
+          <div className="flex flex-wrap items-center gap-2 p-3 border-b border-[#e2e8f0] bg-[#f8fafc]/60">
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94a3b8]" />
+              <Input
+                value={filterKeyword}
+                onChange={(e) => {
+                  setFilterKeyword(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="搜索用户名/姓名/邮箱"
+                className="pl-8 h-9"
+              />
+            </div>
+            <Select
+              value={filterRole}
+              onValueChange={(v) => {
+                setFilterRole(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-32 h-9">
+                <SelectValue placeholder="全部角色" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部角色</SelectItem>
+                <SelectItem value="admin">管理员</SelectItem>
+                <SelectItem value="pm">项目负责人</SelectItem>
+                <SelectItem value="user">普通用户</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={filterStatus}
+              onValueChange={(v) => {
+                setFilterStatus(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-28 h-9">
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="active">正常</SelectItem>
+                <SelectItem value="disabled">禁用</SelectItem>
+                <SelectItem value="pending">待审核</SelectItem>
+              </SelectContent>
+            </Select>
+            {(filterKeyword || filterRole !== 'all' || filterStatus !== 'all') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 text-[#64748b]"
+                onClick={() => {
+                  setFilterKeyword('');
+                  setFilterRole('all');
+                  setFilterStatus('all');
+                  setPage(1);
+                }}
+              >
+                <X className="w-3.5 h-3.5 mr-1" />
+                重置
+              </Button>
+            )}
+          </div>
           <Table>
             <TableHeader>
               <TableRow>

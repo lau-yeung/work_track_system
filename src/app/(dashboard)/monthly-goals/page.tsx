@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth-provider';
 import { apiFetch, apiDownload } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Select,
@@ -46,7 +47,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Target, Plus, Pencil, Trash2, Loader2, GripVertical } from 'lucide-react';
+import { Target, Plus, Pencil, Trash2, Loader2, GripVertical, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { MonthlyGoalDialog, MonthlyGoal } from './monthly-goal-dialog';
 import {
@@ -150,6 +151,7 @@ export default function MonthlyGoalsPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [userId, setUserId] = useState<string>('all');
+  const [keyword, setKeyword] = useState('');
   const [users, setUsers] = useState<UserOption[]>([]);
 
   const [goals, setGoals] = useState<MonthlyGoal[]>([]);
@@ -183,6 +185,7 @@ export default function MonthlyGoalsPage() {
         month: String(month),
       });
       if (isAdmin && userId !== 'all') params.set('userId', userId);
+      if (keyword.trim()) params.set('keyword', keyword.trim());
       const data = await apiFetch<{ data: MonthlyGoal[] }>(`/api/monthly-goals?${params}`);
       setGoals(data.data || []);
     } catch (err) {
@@ -195,7 +198,7 @@ export default function MonthlyGoalsPage() {
   useEffect(() => {
     fetchGoals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year, month, userId]);
+  }, [year, month, userId, keyword]);
 
   useEffect(() => {
     fetchUsers();
@@ -353,6 +356,26 @@ export default function MonthlyGoalsPage() {
                 </Select>
               </div>
             )}
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94a3b8]" />
+              <Input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜索目标/预期输出/任务拆解"
+                className="pl-8 h-9"
+              />
+            </div>
+            {keyword && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 text-[#64748b]"
+                onClick={() => setKeyword('')}
+              >
+                <X className="w-3.5 h-3.5 mr-1" />
+                清除
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -377,27 +400,27 @@ export default function MonthlyGoalsPage() {
               <p className="text-xs mt-1">点击右上角「录入月度目标」，可一次录入多个目标</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-12">优先级</TableHead>
-                    <TableHead className="min-w-[80px]">负责人</TableHead>
-                    <TableHead className="min-w-[160px]">月度目标</TableHead>
-                    <TableHead className="min-w-[140px]">预期产出</TableHead>
-                    <TableHead className="min-w-[180px]">计划任务拆解</TableHead>
-                    <TableHead className="min-w-[110px]">计划完成时间</TableHead>
-                    <TableHead className="min-w-[140px]">验收标准</TableHead>
-                    <TableHead className="min-w-[140px]">风险点</TableHead>
-                    <TableHead className="w-[90px]">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleDragEnd}
-                  >
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">优先级</TableHead>
+                      <TableHead className="min-w-[80px]">负责人</TableHead>
+                      <TableHead className="min-w-[160px]">月度目标</TableHead>
+                      <TableHead className="min-w-[140px]">预期产出</TableHead>
+                      <TableHead className="min-w-[180px]">计划任务拆解</TableHead>
+                      <TableHead className="min-w-[110px]">计划完成时间</TableHead>
+                      <TableHead className="min-w-[140px]">验收标准</TableHead>
+                      <TableHead className="min-w-[140px]">风险点</TableHead>
+                      <TableHead className="w-[90px]">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     <SortableContext
                       items={goals.map((g) => String(g.id))}
                       strategy={verticalListSortingStrategy}
@@ -413,10 +436,10 @@ export default function MonthlyGoalsPage() {
                         />
                       ))}
                     </SortableContext>
-                  </DndContext>
-                </TableBody>
-              </Table>
-            </div>
+                  </TableBody>
+                </Table>
+              </div>
+            </DndContext>
           )}
         </CardContent>
       </Card>

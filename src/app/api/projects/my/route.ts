@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
+import { ensureProductTables } from '@/lib/product-init';
 
 // Get all projects the current user can see (for dropdown selectors)
 export async function GET(request: NextRequest) {
@@ -8,12 +9,14 @@ export async function GET(request: NextRequest) {
     const currentUser = await getSessionUser(request);
     if (!currentUser) return NextResponse.json({ error: '未登录' }, { status: 401 });
 
+    await ensureProductTables();
+
     const client = getSupabaseClient();
 
     if (currentUser.role === 'admin') {
       const { data, error } = await client
         .from('projects')
-        .select('id, name, status')
+        .select('id, name, status, product_id')
         .neq('status', 'completed')
         .order('name');
       if (error) throw new Error(`查询失败: ${error.message}`);
@@ -41,7 +44,7 @@ export async function GET(request: NextRequest) {
 
     const { data, error } = await client
       .from('projects')
-      .select('id, name, status')
+      .select('id, name, status, product_id')
       .in('id', allIds)
       .neq('status', 'completed')
       .order('name');

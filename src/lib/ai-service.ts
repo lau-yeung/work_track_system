@@ -46,19 +46,39 @@ export async function getAIConfig(): Promise<AIConfig | null> {
     .select('config_key, config_value')
     .in('config_key', ['ai_provider', 'ai_api_endpoint', 'ai_api_key', 'ai_model', 'enable_ai_features']);
 
-  if (error || !configs) return null;
+  if (error || !configs) {
+    console.warn('[AI-Config] 读取 system_configs 失败:', error?.message || 'no data');
+    return null;
+  }
 
   const configMap = Object.fromEntries(configs.map((c) => [c.config_key, c.config_value]));
+  console.log('[AI-Config] 原始配置:', JSON.stringify({
+    ai_provider: configMap.ai_provider,
+    enable_ai_features: configMap.enable_ai_features,
+    ai_api_endpoint: configMap.ai_api_endpoint ? '(已设置)' : '(未设置)',
+    ai_api_key: configMap.ai_api_key ? '(已设置)' : '(未设置)',
+    ai_model: configMap.ai_model,
+  }));
 
   // Check if AI is enabled
-  if (configMap.enable_ai_features !== 'true') return null;
+  if (configMap.enable_ai_features !== 'true') {
+    console.warn('[AI-Config] enable_ai_features !== "true", 当前值:', JSON.stringify(configMap.enable_ai_features));
+    return null;
+  }
 
-  return {
+  const cfg: AIConfig = {
     provider: (configMap.ai_provider as AIConfig['provider']) || 'builtin',
     apiEndpoint: configMap.ai_api_endpoint || undefined,
     apiKey: configMap.ai_api_key || undefined,
     model: configMap.ai_model || undefined,
   };
+  console.log('[AI-Config] 解析结果:', JSON.stringify({
+    provider: cfg.provider,
+    apiEndpoint: cfg.apiEndpoint,
+    hasApiKey: !!cfg.apiKey,
+    model: cfg.model,
+  }));
+  return cfg;
 }
 
 /**
@@ -149,36 +169,49 @@ export async function callAI(
   const config = await getAIConfig();
   
   if (!config) {
-    // AI not enabled or not configured, fall back to builtin
+    console.warn('[AI-Call] getAIConfig 返回 null，将使用内置 AI（规则引擎）');
     return callBuiltinAI(messages);
   }
 
   if (config.provider === 'builtin') {
+    console.warn('[AI-Call] provider=builtin，使用内置 AI（规则引擎）');
     return callBuiltinAI(messages);
   }
 
   if (!config.apiEndpoint || !config.apiKey || !config.model) {
-    // External AI config incomplete, fall back to builtin
+    console.warn('[AI-Call] 外部 AI 配置不完整:', {
+      apiEndpoint: config.apiEndpoint,
+      hasApiKey: !!config.apiKey,
+      model: config.model,
+    }, '→ 使用内置 AI 兜底');
     return callBuiltinAI(messages);
   }
 
+  console.log('[AI-Call] 即将调用外部 AI:', {
+    endpoint: config.apiEndpoint,
+    model: config.model,
+  });
   return callExternalAI(config, messages, options);
 }
 
 /**
  * Built-in AI: Rule-based text generation (no actual LLM calls)
  * Used as fallback when no external AI is configured
+ *
+ * 改进：识别月度目标 prompt 时返回 JSON 格式，让 callAIJson 能直接解析，
+ * 避免落到 fallbackFactory 产生带「（规则兜底）」前缀的占位内容。
  */
 async function callBuiltinAI(messages: ChatMessage[]): Promise<AIResponse> {
-  // Find the last user message
+  const allContent = messages.map((m) => m.content).join('\n');
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   const userContent = lastUserMessage?.content || '';
 
-  // Simple rule-based response for work summaries
-  // In real scenarios, this would be replaced by actual LLM logic
   let response = '';
 
-  if (userContent.includes('工作总结') || userContent.includes('总结')) {
+  // ===== 月度目标拆解：从 prompt 提取目标标题，生成结构化 JSON =====
+  if (allContent.includes('月度目标拆解助手') && allContent.includes('请输出 JSON')) {
+    response = generateBuiltinMonthlyGoals(userContent);
+  } else if (userContent.includes('工作总结') || userContent.includes('总结')) {
     response = generateBuiltinSummary(userContent);
   } else if (userContent.includes('分析') || userContent.includes('风险')) {
     response = generateBuiltinAnalysis(userContent);
@@ -190,6 +223,63 @@ async function callBuiltinAI(messages: ChatMessage[]): Promise<AIResponse> {
     content: response,
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   };
+}
+
+/**
+ * Builtin 月度目标 JSON 生成：从 user prompt 里按 `1. xxx` / `1，xxx` / `1、xxx` 提取目标标题，
+ * 基于规则为每个目标生成合理的五个字段，输出 callAIJson 可直接解析的 JSON。
+ */
+function generateBuiltinMonthlyGoals(userContent: string): string {
+  const goals: string[] = [];
+  const lines = userContent.split(/\r?\n/);
+  const numberingRegex = /^\s*[0-9０-９]+[.．、，,)\）]\s*/;
+  for (const line of lines) {
+    let g = line.trim().replace(numberingRegex, '').trim();
+    g = g.replace(/[。；;]+$/, '').trim();
+    if (g && g.length > 0 && !g.includes('请输出 JSON') && !g.includes('日报数据')) {
+      goals.push(g);
+    }
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  const midDay = Math.min(15, lastDay);
+
+  const items = goals.map((title, i) => {
+    // 简单规则：如果目标标题包含"测试"则产出偏向测试报告，包含"开发"则偏向代码
+    const hasTest = /测试|验证|验收|回归/.test(title);
+    const hasDev = /开发|实现|编码|编写/.test(title);
+    const hasResearch = /调研|研究|探索/.test(title);
+
+    const expected_output = hasTest
+      ? `${title} 相关的测试报告 / 缺陷列表 / 质量评估`
+      : hasDev
+        ? `${title} 相关的代码提交 / 文档 / 版本包`
+        : hasResearch
+          ? `${title} 相关的调研报告 / 方案对比 / 推荐意见`
+          : `${title} 的产出物与交付件`;
+
+    const task_breakdown = `1. 需求/范围确认\n2. 方案设计与评审\n3. 执行${title}\n4. 自检与修复\n5. 交付与复盘`;
+
+    const plannedDay = Math.min(midDay + i * 3, lastDay);
+    const planned_completion_date = `${year}-${String(month).padStart(2, '0')}-${String(plannedDay).padStart(2, '0')}`;
+
+    const acceptance_criteria = `「${title}」按计划完成，交付物评审通过，质量符合预期`;
+
+    const risk_points = '依赖项未明确 / 进度受阻 / 资源冲突';
+
+    return {
+      expected_output,
+      task_breakdown,
+      planned_completion_date,
+      acceptance_criteria,
+      risk_points,
+    };
+  });
+
+  return JSON.stringify({ items });
 }
 
 function generateBuiltinSummary(input: string): string {
@@ -241,29 +331,64 @@ async function callExternalAI(
   const temperature = options?.temperature ?? 0.7;
   const maxTokens = options?.maxTokens ?? 4096;
 
-  const response = await fetch(`${config.apiEndpoint}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-    }),
-  });
+  const fullUrl = `${config.apiEndpoint}/chat/completions`;
+  console.log('[AI-External] POST', fullUrl, 'model=', config.model);
+
+  let response;
+  try {
+    response = await fetch(fullUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+      }),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[AI-External] fetch 网络异常:', msg);
+    throw new Error(`AI 服务网络错误: ${msg}`);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`AI API调用失败: ${response.status} ${errorText}`);
+    let detail = errorText;
+    try {
+      const errJson = JSON.parse(errorText);
+      detail = errJson.message || errJson.error?.message || errorText;
+    } catch {
+      // 保留原文
+    }
+    console.error(`[AI-External] HTTP ${response.status} 调用失败:`, detail);
+    // 映射为业务可读错误
+    let hint = detail;
+    if (response.status === 401) hint = 'API 密钥无效，请检查配置';
+    else if (response.status === 403) hint = 'API 密钥被禁用或无权限';
+    else if (response.status === 404) hint = 'API 端点无效或模型不存在，请检查配置';
+    else if (response.status === 402) hint = 'AI 服务账户余额不足，请充值';
+    else if (response.status === 429) hint = '请求过于频繁，请稍后重试';
+    else if (response.status >= 500) hint = `AI 服务暂时不可用 (${response.status})，请稍后重试`;
+    throw new Error(`AI 调用失败 (HTTP ${response.status}): ${hint}`);
   }
 
-  const data = await response.json();
+  const responseText = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    console.error('[AI-External] 响应不是有效 JSON:', responseText.slice(0, 200));
+    throw new Error('AI 返回格式异常');
+  }
+
   const content = data.choices?.[0]?.message?.content || '';
   const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
+  console.log('[AI-External] 成功响应, usage:', usage.total_tokens);
   return {
     content,
     usage: {
@@ -817,4 +942,255 @@ export function calculateTotalScore(scores: {
     scores.collaboration * 0.1 +
     scores.discipline * 0.05;
   return Math.round(total * 10) / 10;
+}
+
+// =========================================================================
+// 月度目标 AI 一键生成：根据目标标题 + 上月日报内容，生成预期产出/任务拆解/
+// 计划完成时间/验收标准/风险点五个字段。
+// 为什么参考上月：月度目标在月初录入，本月尚未开始，上月日报反映了最近的
+// 工作节奏、项目状态与风险因素，AI 据此推断更合理。
+// =========================================================================
+
+export interface MonthlyGoalAIItem {
+  goals: string;
+  expected_output: string;
+  task_breakdown: string;
+  planned_completion_date: string;
+  acceptance_criteria: string;
+  risk_points: string;
+}
+
+export interface MonthlyGoalAIResult {
+  items: MonthlyGoalAIItem[];
+  usedExternalAI: boolean;
+  /** 'none' = AI 正常返回; 'section-parse' = 分节解析; 'fallback-factory' = 走兜底工厂 */
+  fallback?: 'none' | 'section-parse' | 'fallback-factory';
+}
+
+interface MonthlyGoalAIJsonItem {
+  expected_output: string;
+  task_breakdown: string;
+  planned_completion_date: string;
+  acceptance_criteria: string;
+  risk_points: string;
+}
+
+interface MonthlyGoalAIJson {
+  items: MonthlyGoalAIJsonItem[];
+}
+
+/**
+ * 根据月度目标标题与上月日报内容，AI 一键生成每个目标的五个详细字段。
+ *
+ * -上月日报数据会作为上下文注入 prompt，AI 据此推断产出/任务/风险等。
+ * -planned_completion_date 要求 AI 输出 YYYY-MM-DD 格式，落在目标月份内。
+ * -AI 不可用时走 fallbackFactory：按目标标题生成占位内容，确保不阻断流程。
+ */
+export async function generateMonthlyGoalDetails(params: {
+  year: number;
+  month: number;
+  goals: string[];
+  /** 上月日报数据（已聚合为简要文本），用于让 AI 参考 */
+  dailyReportDigest?: string;
+  /** 单字段模式：只生成指定字段 */
+  field?: 'expected_output' | 'task_breakdown' | 'planned_completion_date' | 'acceptance_criteria' | 'risk_points';
+}): Promise<MonthlyGoalAIResult> {
+  const { year, month, goals, dailyReportDigest, field } = params;
+
+  const goalsList = goals
+    .map((g, i) => `${i + 1}. ${g}`)
+    .join('\n');
+
+  const lastDayOfMonth = new Date(year, month, 0).getDate();
+  const monthLabel = `${year}年${month}月`;
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() + 1 === month;
+
+  const fieldDescriptions: Record<string, string> = {
+    expected_output: '预期产出（代码/文档/版本/交付物），分点列出',
+    task_breakdown: '计划任务拆解，分步骤列出（建议 3-6 步）',
+    planned_completion_date: `计划完成日期，格式 YYYY-MM-DD，必须落在 ${monthLabel} 内（1-${lastDayOfMonth} 日）`,
+    acceptance_criteria: '验收标准，明确什么叫完成，可量化',
+    risk_points: '风险点：哪里可能卡住、依赖、阻塞项',
+  };
+
+  // 单字段模式：prompt 简化，只要求生成一个字段
+  if (field) {
+    const singleSystemPrompt = `你是项目月度目标拆解助手。请根据用户提供的目标标题，结合上月日报内容，仅生成「${field}」字段。
+
+输出 JSON 格式：
+{
+  "items": [
+    { "${field}": "${fieldDescriptions[field]}" }
+  ]
+}
+
+要求：
+1. items 数组顺序与输入目标顺序一致。
+2. 仅输出 JSON，禁止额外解释文字。
+3. 基于上月日报反映的工作节奏与项目状态推断，不要凭空编造。
+4. ${field === 'planned_completion_date' ? `必须是 ${monthLabel} 内的有效日期（YYYY-MM-DD）。${isCurrentMonth ? `今天是 ${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}，请合理排期。` : ''}` : '内容具体、可执行。'}
+5. 若上月日报数据不足，基于目标标题合理推断。`;
+
+    const singleUserPrompt = `请为以下 ${goals.length} 个月度目标仅生成「${field}」字段：
+
+${goalsList}
+
+${dailyReportDigest ? `上月日报数据（供参考）：\n${dailyReportDigest}` : '（暂无上月日报数据，请基于目标标题合理推断）'}
+
+请输出 JSON：`;
+
+    const singleFallbackFactory = (): MonthlyGoalAIJson => {
+      const midDay = Math.min(15, lastDayOfMonth);
+      const fallbackValues: Record<string, string> = {
+        expected_output: goals.map((g) => `${g} 相关交付物`).join('；'),
+        task_breakdown: '1. 需求/范围确认\n2. 方案设计与评审\n3. 开发/测试执行\n4. 验收与复盘',
+        planned_completion_date: `${year}-${String(month).padStart(2, '0')}-${String(midDay).padStart(2, '0')}`,
+        acceptance_criteria: goals.map((g) => `「${g}」按计划完成并通过评审`).join('；'),
+        risk_points: '依赖未明确/资源冲突/进度风险',
+      };
+      return {
+        items: goals.map(() => ({ [field]: fallbackValues[field] } as unknown as MonthlyGoalAIJsonItem)),
+      };
+    };
+
+    const singleResult = await callAIJson<MonthlyGoalAIJson>(
+      [
+        { role: 'system', content: singleSystemPrompt },
+        { role: 'user', content: singleUserPrompt },
+      ],
+      {
+        temperature: 0.3,
+        maxTokens: 1500,
+        fallbackFactory: singleFallbackFactory,
+      }
+    );
+
+    const aiItems = Array.isArray(singleResult.data.items) ? singleResult.data.items : [];
+    const items: MonthlyGoalAIItem[] = goals.map((g, i) => {
+      const ai = aiItems[i] || {};
+      return {
+        goals: g,
+        expected_output: field === 'expected_output' ? (typeof ai[field] === 'string' ? ai[field] : '') : '',
+        task_breakdown: field === 'task_breakdown' ? (typeof ai[field] === 'string' ? ai[field] : '') : '',
+        planned_completion_date: field === 'planned_completion_date' ? normalizeDate(ai[field], year, month, lastDayOfMonth) : '',
+        acceptance_criteria: field === 'acceptance_criteria' ? (typeof ai[field] === 'string' ? ai[field] : '') : '',
+        risk_points: field === 'risk_points' ? (typeof ai[field] === 'string' ? ai[field] : '') : '',
+      };
+    });
+
+    return {
+      items,
+      usedExternalAI: singleResult.usedExternalAI,
+      fallback: singleResult.fallback,
+    };
+  }
+
+  // 全字段模式（原有逻辑）
+  const systemPrompt = `你是项目月度目标拆解助手。请根据用户提供的月度目标标题，结合上月日报内容，为每个目标生成五个字段，输出 JSON。
+
+输出 JSON 格式（键名固定）：
+{
+  "items": [
+    {
+      "expected_output": "${fieldDescriptions.expected_output}",
+      "task_breakdown": "${fieldDescriptions.task_breakdown}",
+      "planned_completion_date": "${fieldDescriptions.planned_completion_date}",
+      "acceptance_criteria": "${fieldDescriptions.acceptance_criteria}",
+      "risk_points": "${fieldDescriptions.risk_points}"
+    }
+  ]
+}
+
+要求：
+1. items 数组顺序与输入目标顺序一一对应，数量必须一致。
+2. 仅输出 JSON，禁止额外解释文字。
+3. 预期产出/任务拆解/验收标准/风险点都基于上月日报反映的工作节奏与项目状态推断，不要凭空编造。
+4. planned_completion_date 必须是 ${monthLabel} 内的有效日期（YYYY-MM-DD）。${isCurrentMonth ? `今天是 ${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}，请结合当前日期合理排期。` : ''}
+5. 若上月日报数据不足，可基于目标标题合理推断，但要标注「参考数据不足，请人工校对」。`;
+
+  const userPrompt = `请为以下 ${goals.length} 个月度目标生成详细字段：
+
+${goalsList}
+
+${dailyReportDigest ? `上月日报数据（供参考）：\n${dailyReportDigest}` : '（暂无上月日报数据，请基于目标标题合理推断）'}
+
+请输出 JSON：`;
+
+  const fallbackFactory = (): MonthlyGoalAIJson => {
+    const midDay = Math.min(15, lastDayOfMonth);
+    return {
+      items: goals.map((g) => ({
+        expected_output: `${g} 相关交付物：版本包/测试报告/文档`,
+        task_breakdown: `1. 需求/范围确认\n2. 方案设计与评审\n3. 开发/测试执行\n4. 验收与复盘`,
+        planned_completion_date: `${year}-${String(month).padStart(2, '0')}-${String(midDay).padStart(2, '0')}`,
+        acceptance_criteria: `「${g}」按计划完成并通过评审，产物可交付`,
+        risk_points: '依赖未明确/资源冲突/进度风险',
+      })),
+    };
+  };
+
+  const result = await callAIJson<MonthlyGoalAIJson>(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    {
+      temperature: 0.3,
+      maxTokens: 3000,
+      fallbackFactory,
+    }
+  );
+
+  // 归一化：保证 items 数量与 goals 一致，缺失字段补空字符串
+  const aiItems = Array.isArray(result.data.items) ? result.data.items : [];
+  const items: MonthlyGoalAIItem[] = goals.map((g, i) => {
+    const ai = aiItems[i] || {};
+    return {
+      goals: g,
+      expected_output: typeof ai.expected_output === 'string' ? ai.expected_output : '',
+      task_breakdown: typeof ai.task_breakdown === 'string' ? ai.task_breakdown : '',
+      planned_completion_date: normalizeDate(ai.planned_completion_date, year, month, lastDayOfMonth),
+      acceptance_criteria: typeof ai.acceptance_criteria === 'string' ? ai.acceptance_criteria : '',
+      risk_points: typeof ai.risk_points === 'string' ? ai.risk_points : '',
+    };
+  });
+
+  return {
+    items,
+    usedExternalAI: result.usedExternalAI,
+    fallback: result.fallback,
+  };
+}
+
+/**
+ * 将 AI 返回的日期字符串归一化为 YYYY-MM-DD，并校验落在目标月份内。
+ * 不合法时回退到月份中旬。
+ */
+function normalizeDate(
+  raw: unknown,
+  year: number,
+  month: number,
+  lastDayOfMonth: number
+): string {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    // 回退到月份中旬
+    const mid = Math.min(15, lastDayOfMonth);
+    return `${year}-${String(month).padStart(2, '0')}-${String(mid).padStart(2, '0')}`;
+  }
+  const s = raw.trim();
+  // 支持 YYYY-MM-DD / YYYY/MM/DD
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const d = parseInt(m[3], 10);
+    // 校验：年份与月份匹配目标月份
+    if (y === year && mo === month && d >= 1 && d <= lastDayOfMonth) {
+      return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+    // 日期不在目标月份内，强制归一到目标月份中旬
+  }
+  const mid = Math.min(15, lastDayOfMonth);
+  return `${year}-${String(month).padStart(2, '0')}-${String(mid).padStart(2, '0')}`;
 }

@@ -1,17 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { getSessionUser } from '@/lib/session';
+import { ensureProductTables } from '@/lib/product-init';
 import * as XLSX from 'xlsx';
 
 interface ExportEntry {
   id: number;
   work_date: string;
   hours: string;
+  progress: number | null;
   completed_work: string | null;
   tomorrow_plan: string | null;
   coordination_matters: string | null;
   remarks: string | null;
-  projects: { id: number; name: string };
+  projects: {
+    id: number;
+    name: string;
+    products?: { id: number; name: string } | null;
+  };
+  project_tasks?: { id: number; name: string } | null;
+  project_versions?: { id: number; name: string } | null;
   users: { id: number; real_name: string; username: string };
 }
 
@@ -62,13 +70,14 @@ function getDateRange(dimension: string, dateStr: string): { start: string; end:
 }
 
 function buildExcelWorkbook(entries: ExportEntry[], dimensionLabel: string) {
+  // 列：日期/员工/用户名/产品/项目/版本/任务/工时/进度/完成/计划/协调/备注（共 13 列）
   const wsData: (string | number)[][] = [
-    ['工时日报导出', '', '', '', '', '', '', ''],
-    [`统计维度：${dimensionLabel}`, '', '', '', '', '', '', ''],
-    [`导出时间：${new Date().toLocaleString('zh-CN')}`, '', '', '', '', '', '', ''],
-    [`记录总数：${entries.length} 条`, '', '', '', '', '', '', ''],
+    ['工时日报导出', '', '', '', '', '', '', '', '', '', '', '', ''],
+    [`统计维度：${dimensionLabel}`, '', '', '', '', '', '', '', '', '', '', '', ''],
+    [`导出时间：${new Date().toLocaleString('zh-CN')}`, '', '', '', '', '', '', '', '', '', '', '', ''],
+    [`记录总数：${entries.length} 条`, '', '', '', '', '', '', '', '', '', '', '', ''],
     [],
-    ['日期', '员工姓名', '用户名', '项目名称', '工时(h)', '今日完成工作', '明日计划工作', '协调事项', '备注'],
+    ['日期', '员工姓名', '用户名', '产品', '项目名称', '版本', '任务', '工时(h)', '进度(%)', '今日完成工作', '明日计划工作', '协调事项', '备注'],
   ];
 
   for (const e of entries) {
@@ -76,8 +85,12 @@ function buildExcelWorkbook(entries: ExportEntry[], dimensionLabel: string) {
       e.work_date,
       e.users?.real_name || '-',
       e.users?.username || '-',
+      e.projects?.products?.name || '-',
       e.projects?.name || '-',
+      e.project_versions?.name || '-',
+      e.project_tasks?.name || '-',
       parseFloat(e.hours) || 0,
+      e.progress ?? 0,
       e.completed_work || '',
       e.tomorrow_plan || '',
       e.coordination_matters || '',
@@ -88,7 +101,7 @@ function buildExcelWorkbook(entries: ExportEntry[], dimensionLabel: string) {
   // Summary row
   const totalHours = entries.reduce((sum, e) => sum + (parseFloat(e.hours) || 0), 0);
   wsData.push([]);
-  wsData.push(['合计', '', '', '', Math.round(totalHours * 10) / 10, '', '', '', '']);
+  wsData.push(['合计', '', '', '', '', '', '', Math.round(totalHours * 10) / 10, '', '', '', '', '']);
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
 
@@ -97,8 +110,12 @@ function buildExcelWorkbook(entries: ExportEntry[], dimensionLabel: string) {
     { wch: 12 }, // 日期
     { wch: 12 }, // 员工姓名
     { wch: 12 }, // 用户名
+    { wch: 16 }, // 产品
     { wch: 20 }, // 项目名称
+    { wch: 16 }, // 版本
+    { wch: 24 }, // 任务
     { wch: 10 }, // 工时
+    { wch: 10 }, // 进度
     { wch: 40 }, // 今日完成工作
     { wch: 40 }, // 明日计划工作
     { wch: 30 }, // 协调事项
@@ -107,10 +124,10 @@ function buildExcelWorkbook(entries: ExportEntry[], dimensionLabel: string) {
 
   // Merge title rows
   ws['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 8 } },
-    { s: { r: 2, c: 0 }, e: { r: 2, c: 8 } },
-    { s: { r: 3, c: 0 }, e: { r: 3, c: 8 } },
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 12 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 12 } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: 12 } },
   ];
 
   const wb = XLSX.utils.book_new();
@@ -143,12 +160,12 @@ function buildMarkdown(entries: ExportEntry[], dimensionLabel: string): string {
     lines.push(`> 当日工时合计：${Math.round(dayTotal * 10) / 10} 小时`);
     lines.push('');
 
-    lines.push('| 员工 | 项目 | 工时(h) | 今日完成工作 | 明日计划工作 | 协调事项 | 备注 |');
-    lines.push('|------|------|---------|--------------|--------------|----------|------|');
+    lines.push('| 员工 | 产品 | 项目 | 版本 | 任务 | 工时(h) | 进度 | 今日完成工作 | 明日计划工作 | 协调事项 | 备注 |');
+    lines.push('|------|------|------|------|------|---------|------|--------------|--------------|----------|------|');
     for (const e of dayEntries) {
-      const cell = (v: string | null) => (v || '-').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+      const cell = (v: string | null | undefined) => (v || '-').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
       lines.push(
-        `| ${cell(e.users?.real_name || '-')} | ${cell(e.projects?.name || '-')} | ${e.hours} | ${cell(e.completed_work)} | ${cell(e.tomorrow_plan)} | ${cell(e.coordination_matters)} | ${cell(e.remarks)} |`
+        `| ${cell(e.users?.real_name || '-')} | ${cell(e.projects?.products?.name || '-')} | ${cell(e.projects?.name || '-')} | ${cell(e.project_versions?.name || '-')} | ${cell(e.project_tasks?.name || '-')} | ${e.hours} | ${e.progress ?? 0}% | ${cell(e.completed_work)} | ${cell(e.tomorrow_plan)} | ${cell(e.coordination_matters)} | ${cell(e.remarks)} |`
       );
     }
     lines.push('');
@@ -164,9 +181,9 @@ function buildMarkdown(entries: ExportEntry[], dimensionLabel: string): string {
 
 function buildCSV(entries: ExportEntry[], dimensionLabel: string): string {
   const lines: string[] = [];
-  lines.push('日期,员工姓名,用户名,项目名称,工时(h),今日完成工作,明日计划工作,协调事项,备注');
+  lines.push('日期,员工姓名,用户名,产品,项目名称,版本,任务,工时(h),进度(%),今日完成工作,明日计划工作,协调事项,备注');
   for (const e of entries) {
-    const escape = (v: string | null) => {
+    const escape = (v: string | null | undefined) => {
       if (!v) return '';
       const s = String(v).replace(/"/g, '""');
       return `"${s}"`;
@@ -176,8 +193,12 @@ function buildCSV(entries: ExportEntry[], dimensionLabel: string): string {
         escape(e.work_date),
         escape(e.users?.real_name || '-'),
         escape(e.users?.username || '-'),
+        escape(e.projects?.products?.name || '-'),
         escape(e.projects?.name || '-'),
+        escape(e.project_versions?.name || '-'),
+        escape(e.project_tasks?.name || '-'),
         e.hours,
+        String(e.progress ?? 0),
         escape(e.completed_work),
         escape(e.tomorrow_plan),
         escape(e.coordination_matters),
@@ -194,11 +215,14 @@ export async function GET(request: NextRequest) {
     const currentUser = await getSessionUser(request);
     if (!currentUser) return NextResponse.json({ error: '未登录' }, { status: 401 });
 
+    await ensureProductTables();
+
     const { searchParams } = new URL(request.url);
     const format = (searchParams.get('format') || 'excel').toLowerCase();
     const dimension = (searchParams.get('dimension') || 'day').toLowerCase();
     const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
     const projectId = searchParams.get('projectId');
+    const taskId = searchParams.get('taskId');
     const customStart = searchParams.get('startDate');
     const customEnd = searchParams.get('endDate');
 
@@ -227,7 +251,12 @@ export async function GET(request: NextRequest) {
     const client = getSupabaseClient();
     let query = client
       .from('time_entries')
-      .select('*, projects(id, name), users(id, real_name, username)')
+      .select(
+        '*, projects(id, name, product_id, products!projects_product_id_fkey(id, name)), ' +
+          'project_tasks!time_entries_task_id_fkey(id, name), ' +
+          'project_versions!time_entries_version_id_fkey(id, name), ' +
+          'users(id, real_name, username)'
+      )
       .gte('work_date', startDate)
       .lte('work_date', endDate)
       .order('work_date', { ascending: true })
@@ -239,11 +268,12 @@ export async function GET(request: NextRequest) {
     }
 
     if (projectId) query = query.eq('project_id', projectId);
+    if (taskId) query = query.eq('task_id', taskId);
 
     const { data, error } = await query;
     if (error) throw new Error(`查询失败: ${error.message}`);
 
-    const entries = (data || []) as ExportEntry[];
+    const entries = (data || []) as unknown as ExportEntry[];
 
     if (entries.length === 0) {
       return NextResponse.json(

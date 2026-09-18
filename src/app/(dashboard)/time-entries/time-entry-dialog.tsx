@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,8 +23,28 @@ import {
 import { Plus, Trash2, Loader2, Copy, Edit } from 'lucide-react';
 import { toast } from 'sonner';
 
+interface ProductOption {
+  id: number;
+  name: string;
+}
+
 interface ProjectOption {
   id: number;
+  name: string;
+  status: string;
+  product_id: number | null;
+}
+
+interface TaskOption {
+  id: number;
+  name: string;
+  project_id: number;
+  status: string;
+}
+
+interface VersionOption {
+  id: number;
+  project_id: number;
   name: string;
   status: string;
 }
@@ -33,21 +53,30 @@ interface ProjectOption {
 interface TimeEntryLite {
   id: number;
   project_id: number;
+  task_id: number | null;
+  version_id: number | null;
   work_date: string;
   hours: string;
+  progress: number | null;
   remarks: string | null;
   completed_work: string | null;
   coordination_matters: string | null;
   tomorrow_plan: string | null;
-  projects: { id: number; name: string };
+  projects: { id: number; name: string; products?: { id: number; name: string } | null };
+  project_tasks?: { id: number; name: string } | null;
+  project_versions?: { id: number; name: string } | null;
   users: { id: number; real_name: string; username: string };
 }
 
 // 每行独立承载一条工时记录的全部字段，支持不同日期
 interface EntryRow {
   work_date: string;
+  product_id: string;
   project_id: string;
+  task_id: string;
+  version_id: string;
   hours: string;
+  progress: string;
   completed_work: string;
   coordination_matters: string;
   tomorrow_plan: string;
@@ -57,7 +86,10 @@ interface EntryRow {
 interface TimeEntryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  products: ProductOption[];
   projects: ProjectOption[];
+  tasks: TaskOption[];
+  versions: VersionOption[];
   onSubmitted: () => void;
   // 点击日历方格时传入，用于预填新行；为空时默认今天
   initialDate?: string;
@@ -77,12 +109,32 @@ interface CurrentUser {
   role?: string;
 }
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+// 本地时区格式化，避免 UTC 偏移导致日期错位
+const formatLocalDate = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+const todayStr = () => formatLocalDate(new Date());
 
-const createEmptyRow = (initialDate?: string): EntryRow => ({
+// 新增行默认工时为 8，产品/项目/任务可由调用方传入
+const createEmptyRow = (
+  initialDate?: string,
+  productId = '',
+  projectId = '',
+  taskId = '',
+  versionId = '',
+  hours = '8',
+  progress = ''
+): EntryRow => ({
   work_date: initialDate || todayStr(),
-  project_id: '',
-  hours: '',
+  product_id: productId,
+  project_id: projectId,
+  task_id: taskId,
+  version_id: versionId,
+  hours,
+  progress,
   completed_work: '',
   coordination_matters: '',
   tomorrow_plan: '',
@@ -99,7 +151,10 @@ interface SingleMutationResult {
 export function TimeEntryDialog({
   open,
   onOpenChange,
+  products,
   projects,
+  tasks,
+  versions,
   onSubmitted,
   initialDate,
   existingEntries,
@@ -111,11 +166,124 @@ export function TimeEntryDialog({
   const [rows, setRows] = useState<EntryRow[]>([createEmptyRow(initialDate)]);
   const [submitting, setSubmitting] = useState(false);
 
-  // 每次打开时根据 initialDate 重置新行
+  // 用 ref 保存最新的产品/项目/任务列表，避免 useEffect 因数组引用变化重复触发
+  const projectsRef = useRef(projects);
+  const productsRef = useRef(products);
+  const tasksRef = useRef(tasks);
+  const versionsRef = useRef(versions);
+  projectsRef.current = projects;
+  productsRef.current = products;
+  tasksRef.current = tasks;
+  versionsRef.current = versions;
+
+  // 每次打开时：默认工时为 8、产品/项目/任务取最近一次录入的记录、
+  // "今日完成工作"默认复制"上一个工作日"的"明日计划工作"（跳过周末和法定节假日，支持手动修改）
   useEffect(() => {
-    if (open) {
-      setRows([createEmptyRow(initialDate)]);
-    }
+    if (!open) return;
+    const date = initialDate || todayStr();
+    let cancelled = false;
+
+    (async () => {
+      let prevStr = '';
+      try {
+        // 调内部 /api/holiday/info 获取上一个工作日
+        // timor.tech: type=0 工作日、3 调休上班 都算工作日；1 周末、2 节假日 跳过
+        const cursor = new Date(date);
+        for (let i = 0; i < 15; i++) {
+          cursor.setDate(cursor.getDate() - 1);
+          const candidate = formatLocalDate(cursor);
+          const hres = await apiFetch<{ isWorkday: boolean; fallback?: boolean }>(
+            `/api/holiday/info?date=${candidate}`
+          );
+          if (hres.isWorkday) {
+            prevStr = candidate;
+            break;
+          }
+        }
+        if (!prevStr) {
+          // 节假日查询全失败时退化为简单"前一天"
+          const prev = new Date(date);
+          prev.setDate(prev.getDate() - 1);
+          prevStr = formatLocalDate(prev);
+        }
+      } catch {
+        // 兜底：前一天
+        const prev = new Date(date);
+        prev.setDate(prev.getDate() - 1);
+        prevStr = formatLocalDate(prev);
+      }
+
+      let defaultCompletedWork = '';
+      let latestProductId = '';
+      let latestProjectId = '';
+      let latestTaskId = '';
+      let latestVersionId = '';
+      let latestProgress = '';
+
+      try {
+        const [prevRes, latestRes] = await Promise.all([
+          // 上一个工作日的所有记录，汇总 tomorrow_plan
+          apiFetch<{ data: TimeEntryLite[] }>(
+            `/api/time-entries?page=1&pageSize=50&startDate=${prevStr}&endDate=${prevStr}&mine=1`
+          ),
+          // 当前填报日期之前最近一次录入的记录，用于默认产品/项目/任务
+          // 必须限定 endDate，否则补填历史日期时会取到未来的记录（如4月28日却默认9月数据）
+          apiFetch<{ data: TimeEntryLite[] }>(
+            `/api/time-entries?page=1&pageSize=1&endDate=${date}&mine=1`
+          ),
+        ]);
+
+        const plans = (prevRes.data || [])
+          .map((e) => e.tomorrow_plan?.trim())
+          .filter(Boolean) as string[];
+        defaultCompletedWork = plans.join('\n');
+
+        const latest = latestRes.data?.[0];
+        if (latest) {
+          // 直接从最近记录取值，再用下拉列表校验是否存在
+          const proj = projectsRef.current.find((p) => p.id === latest.project_id);
+          if (proj) {
+            latestProjectId = String(proj.id);
+            const pid = proj.product_id ?? latest.projects?.products?.id ?? null;
+            if (pid != null && productsRef.current.some((p) => p.id === pid)) {
+              latestProductId = String(pid);
+            }
+          }
+          if (latest.task_id && tasksRef.current.some((t) => t.id === latest.task_id)) {
+            latestTaskId = String(latest.task_id);
+          }
+          if (latest.version_id && versionsRef.current.some((v) => v.id === latest.version_id)) {
+            latestVersionId = String(latest.version_id);
+          }
+          if (latest.progress != null) {
+            latestProgress = String(latest.progress);
+          }
+        }
+      } catch {
+        // 无历史记录时使用空默认值
+      }
+
+      if (cancelled) return;
+      setRows([
+        {
+          work_date: date,
+          product_id: latestProductId,
+          project_id: latestProjectId,
+          task_id: latestTaskId,
+          version_id: latestVersionId,
+          hours: '8',
+          progress: latestProgress,
+          completed_work: defaultCompletedWork,
+          coordination_matters: '',
+          tomorrow_plan: '',
+          remarks: '',
+        },
+      ]);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [open, initialDate]);
 
   const resetForm = () => {
@@ -130,11 +298,19 @@ export function TimeEntryDialog({
   };
 
   const addRow = () => {
-    // 新行继承上一行的日期，便于连续填报
+    // 新行继承上一行的日期、产品/项目/任务与工时，便于连续填报
     const lastRow = rows[rows.length - 1];
     setRows([
       ...rows,
-      createEmptyRow(lastRow?.work_date || initialDate),
+      createEmptyRow(
+        lastRow?.work_date || initialDate,
+        lastRow?.product_id,
+        lastRow?.project_id,
+        lastRow?.task_id,
+        lastRow?.version_id,
+        lastRow?.hours || '8',
+        lastRow?.progress || ''
+      ),
     ]);
   };
 
@@ -152,8 +328,45 @@ export function TimeEntryDialog({
   };
 
   const updateRow = (index: number, field: keyof EntryRow, value: string) => {
-    setRows(rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+    setRows(
+      rows.map((row, i) => {
+        if (i !== index) return row;
+        const next = { ...row, [field]: value } as EntryRow;
+        // 联动：切换产品时清空项目/任务/版本；切换项目时清空任务/版本
+        if (field === 'product_id') {
+          next.project_id = '';
+          next.task_id = '';
+          next.version_id = '';
+        } else if (field === 'project_id') {
+          next.task_id = '';
+          next.version_id = '';
+          // 若项目归属产品与当前所选产品不一致，自动纠正产品
+          const proj = projects.find((p) => p.id === Number(value));
+          if (proj?.product_id != null) {
+            next.product_id = String(proj.product_id);
+          }
+        }
+        return next;
+      })
+    );
   };
+
+  // 某行在选定产品/项目下可选项
+  const projectsForRow = (row: EntryRow) =>
+    row.product_id
+      ? projects.filter((p) => p.product_id === Number(row.product_id))
+      : projects;
+  const tasksForRow = (row: EntryRow) =>
+    row.project_id
+      ? tasks.filter(
+          (t) => t.project_id === Number(row.project_id) && t.status === 'active'
+        )
+      : [];
+  // 项目下所有版本（按需求4：填报时可选项目下所有版本，不区分任务关联）
+  const versionsForRow = (row: EntryRow) =>
+    row.project_id
+      ? versions.filter((v) => v.project_id === Number(row.project_id))
+      : [];
 
   // 合计工时与覆盖日期数（用于顶部汇总提示）
   const batchTotal = rows.reduce((sum, row) => {
@@ -198,8 +411,27 @@ export function TimeEntryDialog({
         toast.error(`第${i + 1}行：请选择工作日期`);
         return;
       }
+      if (!row.product_id) {
+        toast.error(`第${i + 1}行：请选择所属产品`);
+        return;
+      }
       if (!row.project_id) {
-        toast.error(`第${i + 1}行：请选择项目`);
+        toast.error(`第${i + 1}行：请选择所属项目`);
+        return;
+      }
+      if (!row.task_id) {
+        toast.error(`第${i + 1}行：请选择所属任务`);
+        return;
+      }
+      // 一致性校验：任务必须归属所选项目，项目必须归属所选产品
+      const proj = projects.find((p) => p.id === Number(row.project_id));
+      const task = tasks.find((t) => t.id === Number(row.task_id));
+      if (proj?.product_id != null && proj.product_id !== Number(row.product_id)) {
+        toast.error(`第${i + 1}行：项目与产品不匹配，请重新选择`);
+        return;
+      }
+      if (!task || task.project_id !== Number(row.project_id)) {
+        toast.error(`第${i + 1}行：任务与项目不匹配，请重新选择`);
         return;
       }
       if (!row.hours) {
@@ -228,20 +460,23 @@ export function TimeEntryDialog({
     setSubmitting(true);
 
     // 循环调用单条填报 API，每行独立提交
-    // 同日同项目的记录会被 API 自动合并（累加工时 + 编号合并完成工作）
+    // 同日同项目同任务的记录会被 API 自动合并（累加工时 + 编号合并完成工作）
     const dailyTotals = new Map<string, number>();
     let successCount = 0;
     let mergedCount = 0;
-    let firstError: string | null = null;
 
     try {
       for (const row of rows) {
         const result = await apiFetch<SingleMutationResult>('/api/time-entries', {
           method: 'POST',
           body: JSON.stringify({
+            product_id: parseInt(row.product_id),
             project_id: parseInt(row.project_id),
+            task_id: parseInt(row.task_id),
+            version_id: row.version_id ? parseInt(row.version_id) : null,
             work_date: row.work_date,
             hours: row.hours,
+            progress: row.progress !== '' ? Number(row.progress) : 0,
             remarks: row.remarks,
             completed_work: row.completed_work,
             coordination_matters: row.coordination_matters,
@@ -253,7 +488,7 @@ export function TimeEntryDialog({
         if (result.merged) mergedCount++;
       }
 
-      const mergedHint = mergedCount > 0 ? `，其中 ${mergedCount} 条已合并到同日同项目记录` : '';
+      const mergedHint = mergedCount > 0 ? `，其中 ${mergedCount} 条已合并到同日同任务记录` : '';
       toast.success(`成功填报 ${successCount} 条工时，覆盖 ${dailyTotals.size} 个日期${mergedHint}`);
 
       // 对每个日期检查是否不足 8h
@@ -267,7 +502,7 @@ export function TimeEntryDialog({
       onSubmitted();
       onOpenChange(false);
     } catch (err) {
-      firstError = err instanceof Error ? err.message : '填报失败';
+      const firstError = err instanceof Error ? err.message : '填报失败';
       if (successCount > 0) {
         toast.error(`部分失败：已成功 ${successCount} 条，剩余失败：${firstError}`);
         onSubmitted();
@@ -310,16 +545,34 @@ export function TimeEntryDialog({
                 key={e.id}
                 className="border border-[#e2e8f0] rounded-lg p-3 space-y-2 bg-[#f8fafc]/60"
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-[#1e3a5f]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-[#e0e7ff] text-[#3730a3] shrink-0">
+                      {e.projects?.products?.name || '未分产品'}
+                    </span>
+                    <span className="font-medium text-[#1e3a5f] truncate">
                       {e.projects?.name || '-'}
                     </span>
-                    <span className="text-xs text-[#94a3b8]">
+                    {e.project_versions?.name && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-[#f1f5f9] text-[#3730a3] font-mono shrink-0">
+                        {e.project_versions.name}
+                      </span>
+                    )}
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-[#f1f5f9] text-[#475569] truncate">
+                      {e.project_tasks?.name || '未分任务'}
+                    </span>
+                    <span className="text-xs text-[#94a3b8] shrink-0">
                       {e.users?.real_name || '-'}
                     </span>
                   </div>
-                  <span className="text-sm font-semibold text-[#1e3a5f]">{e.hours}h</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {e.progress != null && e.progress > 0 && (
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-[#dcfce7] text-[#15803d]">
+                        {e.progress}%
+                      </span>
+                    )}
+                    <span className="text-sm font-semibold text-[#1e3a5f]">{e.hours}h</span>
+                  </div>
                 </div>
                 {e.completed_work && (
                   <div className="text-xs text-[#475569]">
@@ -375,7 +628,7 @@ export function TimeEntryDialog({
         )}
 
         <p className="text-xs text-[#64748b]">
-          每行可独立选择日期与项目，支持一次填报多个日期的工时。同日同项目记录会自动合并。
+          每行需选择 产品 → 项目 → 任务，支持一次填报多个日期的工时。同日同项目同任务记录会自动合并。
           {hoursByDate.size > 0 && (
             <span className="text-[#1e3a5f] font-medium">
               {' '}本次合计 {batchTotal} 小时，覆盖 {hoursByDate.size} 个日期。
@@ -399,25 +652,7 @@ export function TimeEntryDialog({
                     onChange={(e) => updateRow(index, 'work_date', e.target.value)}
                   />
                 </div>
-                <div className="flex-1 space-y-1">
-                  <Label className="text-xs text-[#64748b]">项目 *</Label>
-                  <Select
-                    value={row.project_id}
-                    onValueChange={(v) => updateRow(index, 'project_id', v)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择项目" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((p) => (
-                        <SelectItem key={p.id} value={String(p.id)}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-28 space-y-1">
+                <div className="w-32 space-y-1">
                   <Label className="text-xs text-[#64748b]">工时(h) *</Label>
                   <Input
                     type="number"
@@ -439,13 +674,116 @@ export function TimeEntryDialog({
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
+
+              {/* 产品 → 项目 → 版本 → 任务 四级联动（版本为可选） */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1 min-w-0">
+                  <Label className="text-xs text-[#64748b]">产品 *</Label>
+                  <Select
+                    value={row.product_id}
+                    onValueChange={(v) => updateRow(index, 'product_id', v)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="选择产品" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {products.map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <Label className="text-xs text-[#64748b]">项目 *</Label>
+                  <Select
+                    value={row.project_id}
+                    onValueChange={(v) => updateRow(index, 'project_id', v)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="选择项目" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projectsForRow(row).map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <Label className="text-xs text-[#64748b]">版本（可选）</Label>
+                  <Select
+                    value={row.version_id || 'none'}
+                    onValueChange={(v) => updateRow(index, 'version_id', v === 'none' ? '' : v)}
+                    disabled={!row.project_id}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue
+                        placeholder={
+                          row.project_id
+                            ? versionsForRow(row).length > 0
+                              ? '不选版本'
+                              : '该项目暂无版本'
+                            : '请先选项目'
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">不选版本</SelectItem>
+                      {versionsForRow(row).map((v) => (
+                        <SelectItem key={v.id} value={String(v.id)}>
+                          {v.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <Label className="text-xs text-[#64748b]">任务 *</Label>
+                  <Select
+                    value={row.task_id}
+                    onValueChange={(v) => updateRow(index, 'task_id', v)}
+                    disabled={!row.project_id}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={row.project_id ? '选择任务' : '请先选项目'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tasksForRow(row).map((t) => (
+                        <SelectItem key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* 进度（手动录入，0-100 整数） */}
+              <div className="space-y-1">
+                <Label className="text-xs text-[#64748b]">任务进度(%)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={row.progress}
+                  onChange={(e) => updateRow(index, 'progress', e.target.value)}
+                  placeholder="如 30，表示 30%"
+                  disabled={!row.task_id}
+                />
+              </div>
+
               {index > 0 && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => copyFromAbove(index)}
                   className="w-full"
-                  title="一键复制上一条的全部字段（日期、项目、工时、完成工作、明日计划、协调事宜、备注）"
+                  title="一键复制上一条的全部字段（日期、产品、项目、任务、工时、完成工作、明日计划、协调事宜、备注）"
                 >
                   <Copy className="w-3 h-3 mr-1" />
                   上同（同步上一条明细）
@@ -456,7 +794,7 @@ export function TimeEntryDialog({
                 <Textarea
                   value={row.completed_work}
                   onChange={(e) => updateRow(index, 'completed_work', e.target.value)}
-                  placeholder="请描述该日期该项目完成的工作"
+                  placeholder="请描述该日期该任务完成的工作"
                   rows={2}
                 />
               </div>
@@ -484,7 +822,7 @@ export function TimeEntryDialog({
                   value={row.remarks}
                   onChange={(e) => updateRow(index, 'remarks', e.target.value)}
                   placeholder="可选备注"
-                  rows={2}
+                  rows={1}
                 />
               </div>
             </div>
@@ -520,4 +858,4 @@ export function TimeEntryDialog({
   );
 }
 
-export type { TimeEntryLite, ProjectOption, CurrentUser };
+export type { TimeEntryLite, ProductOption, ProjectOption, TaskOption, VersionOption, CurrentUser };

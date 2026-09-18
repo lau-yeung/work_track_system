@@ -6,6 +6,7 @@ import { useAuth } from '@/components/auth-provider';
 import {
   LayoutDashboard,
   FolderKanban,
+  Package,
   Clock,
   Users,
   BarChart3,
@@ -16,11 +17,14 @@ import {
   CalendarCheck2,
   TrendingUp,
   Award,
+  ListTodo,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
+  { href: '/products', label: '产品管理', icon: Package },
   { href: '/projects', label: '项目管理', icon: FolderKanban },
+  { href: '/tasks', label: '任务管理', icon: ListTodo },
   { href: '/time-entries', label: '工时日报', icon: Clock },
   { href: '/monthly-goals', label: '月度目标', icon: Target },
   { href: '/weekly-reports', label: '周报汇总', icon: CalendarCheck2 },
