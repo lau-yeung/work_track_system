@@ -36,6 +36,23 @@ function setStoredToken(token: string | null) {
   }
 }
 
+/**
+ * 解析接口响应：仅当 Content-Type 为 JSON 时才 res.json()，
+ * 否则读取文本并抛出带状态码与摘要的友好错误，避免把 HTML 错误页
+ * 当 JSON 解析而出现 "Unexpected token '<' ... is not valid JSON"。
+ */
+async function parseJsonResponse<T = unknown>(res: Response): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return (await res.json()) as T;
+  }
+  const text = await res.text().catch(() => '');
+  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+  throw new Error(
+    `服务异常：响应不是 JSON（HTTP ${res.status}）${snippet ? `：${snippet}` : ''}`,
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = await parseJsonResponse<{ user: User }>(res);
         setUser(data.user);
       } else {
         setUser(null);
@@ -77,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    const data = await res.json();
+    const data = await parseJsonResponse<{ token: string; user: User; error?: string }>(res);
     if (!res.ok) throw new Error(data.error || '登录失败');
     // Store token in localStorage
     setStoredToken(data.token);
